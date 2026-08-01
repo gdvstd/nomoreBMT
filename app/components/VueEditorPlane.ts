@@ -11,10 +11,13 @@ import type { EditorPlaneResult } from "@/lib/types";
 import { provideEditor, useCanvas } from "../../node_modules/@open-pencil/vue/dist/canvas/CanvasRoot.js";
 // @ts-expect-error OpenPencil's package export omits declarations for this focused module.
 import { useCanvasInput } from "../../node_modules/@open-pencil/vue/dist/canvas/useCanvasInput.js";
+import type { EditorInput } from "@/lib/editor-input/types";
 
 type Mode = "auto" | "live" | "review";
 
 type Props = {
+  projectId: string;
+  editorInput: EditorInput;
   ideaId: string;
   ideaTitle: string;
   ideaHook: string;
@@ -25,7 +28,7 @@ type Props = {
   ideaAssets: string[];
   task: string;
   brandText: string;
-  assetItems: { name: string; dataUrl: string }[];
+  assetItems: { assetId: string; name: string; dataUrl: string; url?: string }[];
   brandContext: Record<string, unknown>;
   onBack: () => void;
   onFinish: (result: EditorPlaneResult) => void;
@@ -90,6 +93,8 @@ function childText(text: string, className = "") {
 const VueEditorPlane = defineComponent({
   name: "VueEditorPlane",
   props: {
+    projectId: { type: String, required: true },
+    editorInput: { type: Object, required: true },
     ideaId: { type: String, required: true },
     ideaTitle: { type: String, required: true },
     ideaHook: { type: String, required: true },
@@ -239,7 +244,7 @@ const VueEditorPlane = defineComponent({
     };
 
     const layerIds: Record<string, string> = {};
-    const cardCount = props.ideaSlides.length;
+    const cardCount = props.editorInput.slides.length;
     if (cardCount === 0) {
       throw new Error("선택한 아이디어에 슬라이드 계획이 없습니다.");
     }
@@ -628,16 +633,17 @@ const VueEditorPlane = defineComponent({
     async function startAgent() {
       const browserContextId = crypto.randomUUID();
       try {
-        const response = await fetch(`/api/projects/${browserContextId}/editor/run`, {
+        const response = await fetch(`/api/projects/${props.projectId}/editor/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+          editorInput: props.editorInput,
           task: {
-            id: browserContextId,
+            id: props.projectId,
             request: props.task,
             target: "instagram_carousel",
             language: "ko",
-            cardCount,
+            cardCount: props.editorInput.slides.length,
           },
           ideaCard: {
             id: props.ideaId,
@@ -650,12 +656,12 @@ const VueEditorPlane = defineComponent({
             slides: props.ideaSlides,
           },
           assets: {
-            assetSetId: browserContextId,
+            assetSetId: props.projectId,
             items: props.assetItems.map((asset, index) => ({
-              assetId: `${browserContextId}-asset-${index + 1}`,
+              assetId: asset.assetId,
               kind: "image",
               name: asset.name,
-              url: asset.dataUrl,
+              url: asset.url ?? asset.dataUrl,
               nodeId: assetNodeIds[index],
             })),
           },

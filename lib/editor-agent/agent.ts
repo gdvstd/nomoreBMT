@@ -1,4 +1,11 @@
-import { Agent, generateTraceId, run, withTrace } from "@openai/agents";
+import {
+  Agent,
+  generateTraceId,
+  run,
+  user,
+  withTrace,
+  type AgentInputItem,
+} from "@openai/agents";
 
 import { createOpenPencilAgentTools } from "./openpencil-tools";
 import {
@@ -76,6 +83,10 @@ that was not applied to the document.
    warnings, and unresolved items.
 
 Design constraints:
+- Treat the supplied EditorInput as the authoritative slide count, visible
+  text, shared design direction, per-slide composition, and user-image mapping.
+- Design-reference images are visual evidence only. Never place them in the
+  finished composition; only user-photo URLs may become slide imagery.
 - Follow the provided design principles and idea card before adding stylistic
   choices. Preserve the user's brand voice and requested language.
 - Prefer the user's assets over stock or newly invented substitutes.
@@ -105,6 +116,8 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
     "Create the requested composition in the connected OpenPencil document.",
     "\nTASK\n",
     safeJson(input.task),
+    "\nAUTHORITATIVE EDITOR INPUT\n",
+    safeJson(input.editorInput),
     "\nSELECTED IDEA CARD\n",
     safeJson(input.ideaCard),
     "\nASSET MANIFEST\n",
@@ -120,6 +133,40 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
       ? `\nMARKETER CONTEXT\n${safeJson(input.marketerContext)}`
       : "",
   ].join("\n");
+}
+
+export function buildEditorAgentInput(
+  input: EditorAgentInput,
+): AgentInputItem[] {
+  const content: Array<Record<string, unknown>> = [
+    { type: "input_text", text: buildEditorAgentPrompt(input) },
+  ];
+  const seen = new Set<string>();
+
+  for (const url of input.editorInput.design.referenceImageUrls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    content.push({
+      type: "input_text",
+      text: "DESIGN_REFERENCE: analyze visual principles only; never render this image.",
+    });
+    content.push({ type: "input_image", image: url, detail: "high" });
+  }
+  for (const [index, slide] of input.editorInput.slides.entries()) {
+    if (!slide.imageUrl || seen.has(slide.imageUrl)) continue;
+    seen.add(slide.imageUrl);
+    content.push({
+      type: "input_text",
+      text: `USER_PHOTO for slide ${index + 1}: this image may be placed in the result.`,
+    });
+    content.push({
+      type: "input_image",
+      image: slide.imageUrl,
+      detail: "high",
+    });
+  }
+
+  return [user(content as Parameters<typeof user>[0])];
 }
 
 export type EditorAgentOptions = {
@@ -197,7 +244,7 @@ export async function runEditorAgent(
   const result = await withTrace(
     "BMT Editor Agent",
     async () => {
-      const stream = await run(runtime.agent, buildEditorAgentPrompt(input), {
+      const stream = await run(runtime.agent, buildEditorAgentInput(input), {
         context: runtime.context,
         stream: true,
         // Six-card composition needs room for inspection, per-card rendering,

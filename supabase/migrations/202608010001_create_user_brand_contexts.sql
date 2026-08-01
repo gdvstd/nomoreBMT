@@ -14,16 +14,22 @@ grant select, insert, update on table public.user_brand_contexts to authenticate
 
 alter table public.user_brand_contexts enable row level security;
 
+drop policy if exists "Users can read their own brand context"
+  on public.user_brand_contexts;
 create policy "Users can read their own brand context"
   on public.user_brand_contexts
   for select
   using (auth.uid() = user_id);
 
+drop policy if exists "Users can insert their own brand context"
+  on public.user_brand_contexts;
 create policy "Users can insert their own brand context"
   on public.user_brand_contexts
   for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Users can update their own brand context"
+  on public.user_brand_contexts;
 create policy "Users can update their own brand context"
   on public.user_brand_contexts
   for update

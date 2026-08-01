@@ -1,72 +1,97 @@
 ---
 name: scout-instagram-references
-description: Find public Instagram post references related to a user's planned topic through web search, verify direct Instagram post or Reel URLs, compare topic and format similarity, extract evidence-backed creative patterns, and prepare reference context for an editor agent. Use when a marketer agent needs stronger examples, competitive inspiration, current Instagram formats, reusable hooks, carousel structures, or topic-specific reference posts before creating content.
+description: Discover public Instagram single-image and carousel posts related to a user's planned topic with Apify, verify direct post URLs and public metrics, rank topic-matched references without treating missing metrics as zero, extract evidence-backed creative patterns, and prepare editor-agent context. Use when a marketer needs competitive references, current feed-post formats, reusable hooks, carousel structures, or topic-specific inspiration before creating an Instagram post.
 ---
 
 # Scout Instagram References
 
-Use web search to discover public Instagram references. A search result is a
-candidate, not proof that the post is popular or visually strong.
+Use Apify as the primary discovery provider. Treat scraped results as public,
+unofficial evidence that may become unavailable when Instagram changes.
+
+Read [output-schema.md](references/output-schema.md) before returning results.
 
 ## Inputs
 
-- `topic`: Required description of what the user plans to publish.
-- `objective`: Desired viewer action or business goal. Default to an empty
-  string.
-- `timeRange`: One of `7d`, `30d`, `90d`, or `any`. Default to `30d`.
+- `topic`: Required description of the planned post.
+- `objective`: Desired viewer action. Default to an empty string.
+- `timeRange`: `7d`, `30d`, `90d`, or `any`. Default to `30d`.
 - `region`: Search market such as `KR` or `global`. Default to `KR`.
-- `formatFocus`: One of `carousel`, `reel`, `single_image`, or `all`. Default to
-  `carousel`.
-- `maxReferences`: Integer from 1 to 8. Default to 5.
+- `formatFocus`: `carousel`, `single_image`, or `all` for the current MVP.
+- `maxReferences`: Integer from 1 to 3. Default to 3.
+
+Return no references for `reel`; the current workflow excludes video posts.
 
 ## Workflow
 
 1. Validate that `topic` is concrete enough to search. Do not invent a topic.
-2. Build four to six queries using Korean and English variants where useful.
-   Include queries targeting `site:instagram.com/p/` and
-   `site:instagram.com/reel/`, the requested format, region, recency, and
-   engagement-oriented terms.
-3. Run web search. Search must execute at least once.
-4. Accept a reference only when a direct canonical URL under
-   `instagram.com/p/`, `instagram.com/reel/`, or `instagram.com/tv/` is
-   discoverable. Keep articles and roundups only as supporting sources.
-5. Deduplicate reposts, tracking URLs, and repeated URLs.
-6. Score topic, audience, and format similarity separately. Explain each score
-   from observable evidence.
-7. Record popularity numbers only when a source explicitly exposes them. Do not
-   infer likes, comments, saves, shares, views, or follower count.
-8. Analyze the hook, content structure, visual pattern, and engagement
-   mechanism only to the level visible in the public result. Mark the visual
-   evidence scope as `full_post`, `public_preview`, `text_only`, or
-   `unavailable`.
-9. Extract transferable principles. Do not suggest copying distinctive text,
-   artwork, branding, or an entire slide sequence.
-10. Return the structure in [output-schema.md](references/output-schema.md).
+2. Derive exactly three compact hashtag keyword variants and construct their
+   Instagram hashtag URLs locally.
+3. Run Apify Instagram Scraper once with `resultsType: posts` and collect at
+   most 18 posts total across those hashtag URLs.
+4. Keep direct canonical `instagram.com/p/` URLs only. Exclude `/reel/`,
+   `/tv/`, video media types, and `productType: clips`.
+5. Deduplicate and filter by the requested feed format.
+6. Filter by topic before ranking. Select and analyze at most three references.
+   Do not select a
+   post merely because its engagement is high.
+7. Analyze captions and supplied preview images only. Record evidence scope as
+   `full_post`, `public_preview`, `text_only`, or `unavailable`.
+8. Analyze reusable design evidence as well as hooks: layout, visual hierarchy,
+   typography, color, image treatment, spacing, information density, and
+   carousel flow when visible.
+9. Rank references with the deterministic scoring rules below. Keep at most two
+   references from one creator.
+10. Extract reusable hooks, information hierarchy, carousel flow, image/text
+    balance, and CTA principles. Never copy distinctive text, artwork,
+    branding, or a complete slide sequence.
+10. Do not retry collection or perform a fallback search when fewer than three
+    valid references remain. An empty result is valid.
+11. Return the structure in
+    [output-schema.md](references/output-schema.md).
+
+## Public metrics
+
+- Preserve public likes, comments, and timestamp exactly.
+- Convert hidden values such as `-1` to `null`.
+- Keep unavailable saves and shares as `null`; never infer them.
+- Do not substitute missing metrics with zero.
+- Calculate weighted public reactions only when both likes and comments are
+  present:
+
+```text
+weightedPublicReactions = likes + 3 × comments
+```
 
 ## Ranking
 
-Prioritize in this order:
+Use these weights:
 
-1. Topic and intent similarity.
-2. Direct Instagram URL verification.
-3. Explicit, traceable engagement evidence.
-4. Format similarity.
-5. Recency.
+```text
+topic similarity               45%
+public likes and comments        30%
+recency                         15%
+evidence coverage               10%
+```
 
-Never rank raw engagement counts across differently sized accounts as if they
-were directly comparable. Use `unknown` when popularity cannot be verified.
+Normalize performance within the candidate set. If a component is unknown,
+exclude its weight and renormalize the remaining weights; do not score the
+unknown component as zero. Do not use account outlier ratios in the MVP.
 
-## Evidence and confidence
+Rank posts, not accounts. Use creator diversity only as a final cap.
 
-- Preserve every source URL used for a claim.
-- Clearly distinguish the Instagram post URL from supporting sources.
-- Keep low-confidence references when useful, but label the limitation.
-- If no verified Instagram URL is found, return an empty reference list instead
-  of replacing it with blog posts.
+## Evidence rules
+
+- Preserve each direct Instagram URL and every supporting hashtag/source URL.
+- Treat Apify as the collection provider, not an official Instagram API.
+- Separate observation, interpretation, and hypothesis.
+- Keep confidence and collection limitations.
+- Set `performanceSignal` to `unknown` when either likes or comments is
+  unavailable.
+- If no verified post remains, return an empty `references` array and explain
+  the failed collection stage.
 - Write synthesized findings in Korean while preserving URLs and handles.
 
 ## Handoff
 
-Pass `references`, `patterns`, and `editorContext` to the editor agent. The
-editor should adapt the underlying mechanism to the user's identity, not imitate
-the source asset.
+Pass `references`, `patterns`, and `editorContext` to the marketer/editor
+workflow. Adapt only `transferableElements` to the user's brand.

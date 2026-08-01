@@ -27,6 +27,11 @@ Return exactly two cards. Every card must include:
 - a concise description of the narrative and visual treatment;
 - the carousel format and a 3–12 slide plan;
 - human-readable asset labels plus the exact asset IDs used.
+- up to two exact reference asset IDs when reference images are supplied.
+
+Reference images are design evidence only. Use them to derive reusable layout,
+hierarchy, color, typography, spacing, and image-treatment principles. Never
+plan to place a reference image in the finished post.
 
 Do not claim facts that are not present in the brief or visible in the assets.
 Keep copy in the requested language and preserve the user's brand direction.
@@ -43,6 +48,9 @@ function safeJson(value: unknown) {
 
 function buildTextPrompt(input: MarketerAgentInput) {
   const manifest = input.assets.items.map(({ url: _url, ...asset }) => asset);
+  const referenceManifest = input.references?.items.map(
+    ({ imageUrl: _imageUrl, ...reference }) => reference,
+  );
 
   return [
     "Generate exactly two idea cards for this content request.",
@@ -58,6 +66,9 @@ function buildTextPrompt(input: MarketerAgentInput) {
     "\nASSET MANIFEST (the images follow this text)\n",
     safeJson({ assetSetId: input.assets.assetSetId, items: manifest }),
     "\nUse the assetId values exactly when assigning assets to each idea.\n",
+    referenceManifest?.length
+      ? `\nDESIGN REFERENCE MANIFEST (images follow; choose at most two IDs per idea)\n${safeJson(referenceManifest)}`
+      : "",
   ].join("\n");
 }
 
@@ -77,6 +88,18 @@ export function buildMarketerAgentInput(input: MarketerAgentInput): AgentInputIt
     } else if (asset.fileId) {
       content.push({ type: "input_image", image: { id: asset.fileId }, detail: "high" });
     }
+  }
+
+  for (const reference of input.references?.items ?? []) {
+    content.push({
+      type: "input_text",
+      text: `DESIGN_REFERENCE assetId=${reference.assetId} instagramUrl=${reference.instagramUrl} sourceSlideIndex=${reference.sourceSlideIndex}. Do not use as final content.`,
+    });
+    content.push({
+      type: "input_image",
+      image: reference.imageUrl,
+      detail: "high",
+    });
   }
 
   return [user(content as Parameters<typeof user>[0])];

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Scout Instagram References"
-  short_description: "Find topic-matched Instagram reference posts"
-  default_prompt: "Use $scout-instagram-references to find stronger Instagram references for my planned topic."
+  display_name: "Scout Instagram Feed References"
+  short_description: "Find and rank topic-matched Instagram feed posts"
+  default_prompt: "Use $scout-instagram-references to find evidence-backed single-image and carousel references for my planned topic."

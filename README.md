@@ -35,6 +35,27 @@ The full structured context is sent to both downstream agents:
 The Instagram ID is stored as account identity for later analysis. It does not
 replace Instagram OAuth or the access token required by the Graph API.
 
+## Project assets and EditorInput
+
+Authenticated projects store user photos and selected Instagram design
+references in the private `project-assets` Supabase Storage bucket. Apply
+`supabase/migrations/202608020001_create_project_assets.sql` to create the
+bucket, `project_assets` metadata table, grants, and owner-only RLS policies.
+
+The creation flow is:
+
+1. Upload user photos and optional descriptions to private Storage.
+2. Run reference scouting once and send public preview candidates to Marketer.
+3. Let each idea select up to two design-reference asset IDs.
+4. After the user selects one idea, copy only those references into Storage.
+5. Call `POST /api/projects/[id]/editor/input` once to create the selected
+   idea's slide-level `EditorInput`.
+6. Send `EditorInput`, user photos, and design references to Editor Agent.
+
+Reference images are multimodal design evidence only and must never be placed
+in the finished carousel. Database rows retain storage paths; Agent runs use
+short-lived signed URLs.
+
 ## Instagram context model
 
 The MVP includes an Instagram analysis flow at
@@ -84,9 +105,10 @@ The marketer workflow is defined as two reusable, repo-local skills:
 
 - `skills/analyze-instagram-account`: audits the connected owned account using
   media, comments, insights, and slide images.
-- `skills/scout-instagram-references`: finds topic-matched public Instagram
-  references through OpenAI web search and accepts only verified direct
-  Instagram post URLs.
+- `skills/scout-instagram-references`: uses Apify to discover topic-matched
+  public single-image and carousel posts, then ranks verified direct Instagram
+  post URLs with evidence-preserving metrics before OpenAI extracts reusable
+  creative patterns.
 
 The owned-account analysis endpoint loads the first skill automatically:
 
@@ -101,7 +123,7 @@ Search for references with the second skill:
 ```bash
 curl -X POST http://localhost:3000/api/instagram/references \
   -H "Content-Type: application/json" \
-  -d '{"topic":"성수동 맛집 추천 카드뉴스","objective":"저장","timeRange":"30d","region":"KR","formatFocus":"carousel","maxReferences":5}'
+  -d '{"topic":"성수동 맛집 추천 카드뉴스","objective":"저장","timeRange":"30d","region":"KR","formatFocus":"carousel","maxReferences":3}'
 ```
 
 The response includes verified Instagram URLs, search sources, similarity

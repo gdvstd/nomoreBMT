@@ -6,7 +6,7 @@ import {
 import type { ReferenceScoutInput } from "@/lib/reference-scout/schema";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 const timeRanges = new Set<ReferenceScoutInput["timeRange"]>([
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       )
         ? (requestedFormat as ReferenceScoutInput["formatFocus"])
         : "carousel",
-      maxReferences: clampInteger(body.maxReferences, 5, 1, 8),
+      maxReferences: clampInteger(body.maxReferences, 3, 1, 3),
     };
 
     const context = await scoutInstagramReferences(input);

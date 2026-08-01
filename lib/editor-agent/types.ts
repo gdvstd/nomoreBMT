@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { editorInputSchema } from "@/lib/editor-input/types";
 
 /**
  * The editor agent works on logical asset references rather than filesystem
@@ -59,6 +60,7 @@ export const openPencilContextSchema = z.object({
 });
 
 export const editorAgentInputSchema = z.object({
+  editorInput: editorInputSchema,
   task: editorTaskSchema,
   ideaCard: editorIdeaCardSchema,
   assets: z.object({

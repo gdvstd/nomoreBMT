@@ -18,6 +18,15 @@ import {
   saveOnboardingProfile,
   type OnboardingStorageResult,
 } from "@/lib/onboarding/storage";
+import {
+  editorInputSchema,
+  type EditorInput,
+} from "@/lib/editor-input/types";
+import {
+  uploadUserProjectAssets,
+} from "@/lib/project-assets/browser";
+import type { ProjectAsset } from "@/lib/project-assets/types";
+import type { InstagramReferenceContext } from "@/lib/reference-scout/schema";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 import type { EditorPlaneResult, Idea, RenderedPost, Screen } from "@/lib/types";
 
@@ -27,6 +36,15 @@ type UploadedAsset = {
   previewUrl: string;
   description: string;
   dataUrl: string;
+  file: File;
+};
+
+type ReferenceAssetCandidate = {
+  assetId: string;
+  imageUrl: string;
+  instagramUrl: string;
+  sourceSlideIndex: number;
+  designNotes: string[];
 };
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -77,7 +95,7 @@ export default function Home() {
   const [storageMode, setStorageMode] = useState<OnboardingStorageResult["storage"] | null>(null);
   const [brief, setBrief] = useState("");
   const [files, setFiles] = useState<UploadedAsset[]>([]);
-  const [ideas, setIdeas] = useState<Idea[]>(mockIdeas);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasError, setIdeasError] = useState("");
   const [fileError, setFileError] = useState("");
@@ -87,6 +105,12 @@ export default function Home() {
   const [ideasStreamText, setIdeasStreamText] = useState("");
   const [ideasTraceId, setIdeasTraceId] = useState("");
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState("");
+  const [storedUserAssets, setStoredUserAssets] = useState<ProjectAsset[]>([]);
+  const [referenceAssets, setReferenceAssets] = useState<
+    ReferenceAssetCandidate[]
+  >([]);
+  const [editorInput, setEditorInput] = useState<EditorInput | null>(null);
   const [renderedPost, setRenderedPost] = useState<RenderedPost | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
   const marketerStream = useRef<EventSource | null>(null);
@@ -223,6 +247,7 @@ export default function Home() {
       name: file.name,
       previewUrl: URL.createObjectURL(file),
       dataUrl: await readFileAsDataUrl(file),
+      file,
       description: "",
     })));
     setFiles((previous) => {
@@ -259,13 +284,92 @@ export default function Home() {
   function chooseIdea(idea: Idea) {
     setSelectedIdea(idea);
     setRenderedPost(null);
+    setEditorInput(null);
   }
 
-  function createPost() {
+  async function createPost() {
     if (!selectedIdea) return;
-    setRenderedPost(null);
-    setActiveSlide(0);
-    setScreen("editor");
+    if (!activeProjectId || !storedUserAssets.length) {
+      setIdeasError(
+        "업로드한 사진의 저장 정보가 없습니다. 요청 수정으로 돌아가 아이디어를 다시 생성해주세요.",
+      );
+      return;
+    }
+    setIdeasLoading(true);
+    setIdeasError("");
+
+    try {
+      const selectedReferenceIds = new Set(
+        (selectedIdea.referenceAssetIds ?? []).slice(0, 2),
+      );
+      const selectedReferences = referenceAssets.filter((asset) =>
+        selectedReferenceIds.has(asset.assetId),
+      ).slice(0, 2);
+
+      let storedReferenceAssets: ProjectAsset[] = [];
+      if (selectedReferences.length) {
+        const referenceResponse = await fetch(
+          `/api/projects/${activeProjectId}/assets/references`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: selectedReferences }),
+          },
+        );
+        const referencePayload = await referenceResponse.json() as {
+          assets?: ProjectAsset[];
+          error?: string;
+          detail?: string;
+        };
+        if (!referenceResponse.ok || !referencePayload.assets) {
+          throw new Error(
+            referencePayload.detail ??
+            referencePayload.error ??
+            "Reference 이미지를 저장하지 못했어요.",
+          );
+        }
+        storedReferenceAssets = referencePayload.assets;
+      }
+
+      const inputResponse = await fetch(
+        `/api/projects/${activeProjectId}/editor/input`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            request: brief,
+            language: "ko",
+            selectedIdea,
+            brandContext,
+            userAssets: storedUserAssets,
+            referenceAssets: storedReferenceAssets,
+          }),
+        },
+      );
+      const inputPayload = await inputResponse.json() as {
+        editorInput?: unknown;
+        error?: string;
+        detail?: string;
+      };
+      if (!inputResponse.ok || !inputPayload.editorInput) {
+        throw new Error(
+          inputPayload.detail ??
+          inputPayload.error ??
+          "Editor instruction을 만들지 못했어요.",
+        );
+      }
+
+      setEditorInput(editorInputSchema.parse(inputPayload.editorInput));
+      setRenderedPost(renderMockPost(selectedIdea.id));
+      setActiveSlide(0);
+      setScreen("editor");
+    } catch (error) {
+      setIdeasError(
+        error instanceof Error ? error.message : "Editor instruction 생성에 실패했어요.",
+      );
+    } finally {
+      setIdeasLoading(false);
+    }
   }
 
   async function generateIdeas() {
@@ -278,11 +382,64 @@ export default function Home() {
     setIdeasEventLog([{ id: `${Date.now()}-start`, kind: "status", label: initialMessage }]);
     setIdeasStreamText("");
     setIdeasTraceId("");
+    setIdeas([]);
     setSelectedIdea(null);
+    setStoredUserAssets([]);
+    setReferenceAssets([]);
     setScreen("ideas");
 
     try {
       const projectId = crypto.randomUUID();
+      setActiveProjectId(projectId);
+      setEditorInput(null);
+
+      const referenceRequest = fetch("/api/instagram/references", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: brief,
+          objective: "저장",
+          timeRange: "30d",
+          region: "KR",
+          formatFocus: "carousel",
+          maxReferences: 3,
+        }),
+      })
+        .then(async (referenceResponse) => {
+          const payload = await referenceResponse.json() as {
+            context?: InstagramReferenceContext;
+          };
+          return referenceResponse.ok ? payload.context ?? null : null;
+        })
+        .catch(() => null);
+
+      const [uploadedAssets, referenceContext] = await Promise.all([
+        uploadUserProjectAssets(
+          projectId,
+          files.map((file) => ({
+            assetId: file.id,
+            file: file.file,
+            description: file.description,
+          })),
+        ),
+        referenceRequest,
+      ]);
+      setStoredUserAssets(uploadedAssets);
+
+      const discoveredReferences: ReferenceAssetCandidate[] =
+        referenceContext?.references.flatMap((reference) =>
+          (reference.previewImageUrls ?? []).slice(0, 2).map(
+            (imageUrl, index) => ({
+              assetId: `reference-${reference.rank}-${index + 1}`,
+              imageUrl,
+              instagramUrl: reference.instagramUrl,
+              sourceSlideIndex: index + 1,
+              designNotes: reference.creativeAnalysis.visualPatterns,
+            }),
+          ),
+        ).slice(0, 6) ?? [];
+      setReferenceAssets(discoveredReferences);
+
       const response = await fetch(`/api/projects/${projectId}/ideas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -295,14 +452,17 @@ export default function Home() {
           target: "instagram_carousel",
           assets: {
             assetSetId: projectId,
-            items: files.map((file, index) => ({
-              assetId: `${projectId}-asset-${index + 1}`,
+            items: uploadedAssets.map((asset) => ({
+              assetId: asset.assetId,
               kind: "image",
-              name: file.name,
-              url: file.dataUrl,
-              description: file.description,
+              name: asset.name,
+              url: asset.signedUrl,
+              description: asset.description,
             })),
           },
+          references: discoveredReferences.length
+            ? { items: discoveredReferences }
+            : undefined,
         }),
       });
 
@@ -388,7 +548,7 @@ export default function Home() {
         }
         if (agentEvent.type === "status" && agentEvent.status === "failed") {
           setIdeasLoading(false);
-          setIdeas(mockIdeas);
+          setIdeas([]);
           setIdeasError(agentEvent.message ?? "마케팅 agent가 실패했어요");
           stream.close();
           marketerStream.current = null;
@@ -405,15 +565,13 @@ export default function Home() {
           detail: "error",
         }, ...previous].slice(0, 40));
         setIdeasLoading(false);
-        setIdeas(mockIdeas);
+        setIdeas([]);
         setIdeasError(errorMessage);
         stream.close();
         marketerStream.current = null;
       });
     } catch (error) {
-      // The local UI remains explorable without credentials; the banner makes
-      // it explicit that these are the existing mock ideas, not an agent run.
-      setIdeas(mockIdeas);
+      setIdeas([]);
       const errorMessage = error instanceof Error ? error.message : "마케팅 에이전트를 실행하지 못했어요";
       setIdeasCurrentReasoning(errorMessage);
       setIdeasEventLog((previous) => [{
@@ -457,11 +615,11 @@ export default function Home() {
         )}
 
         {screen === "ideas" && (
-          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
+          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} ready={Boolean(activeProjectId && storedUserAssets.length)} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
-        {screen === "editor" && selectedIdea && brandContext && (
-          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} brandContext={brandContext} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result: EditorPlaneResult) => {
+        {screen === "editor" && selectedIdea && brandContext && editorInput && activeProjectId && (
+          <EditorPlaneMount projectId={activeProjectId} editorInput={editorInput} idea={selectedIdea} task={brief} brandText={brandText} brandContext={brandContext} assetItems={files.map((file) => ({ assetId: file.id, name: file.name, dataUrl: file.dataUrl, url: storedUserAssets.find((asset) => asset.assetId === file.id)?.signedUrl }))} onBack={() => setScreen("ideas")} onFinish={(result: EditorPlaneResult) => {
             const gradients = selectedIdea.accent === "coral"
               ? ["sunset", "seafoam", "sand", "night", "coral"]
               : ["dawn", "ocean", "cream", "twilight", "blue"];
@@ -573,7 +731,7 @@ function Dashboard({
 
 function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReorderFiles, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onReorderFiles: (fromIndex: number, toIndex: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
   const [activeAssetId, setActiveAssetId] = useState<string | null>(null);
-  const isReady = brief.trim() && files.length > 0 && files.every((file) => file.description.trim());
+  const isReady = Boolean(brief.trim()) && files.length > 0;
   const activeAssetIndexFromId = activeAssetId ? files.findIndex((file) => file.id === activeAssetId) : -1;
   const safeAssetIndex = activeAssetIndexFromId >= 0 ? activeAssetIndexFromId : 0;
   const activeAsset = files[safeAssetIndex];
@@ -617,10 +775,10 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReo
     setActiveAssetId(remaining[nextIndex]?.id ?? null);
   }
 
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>2. 사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 한짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 필요한 사진에만 추가 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES · DESCRIPTION OPTIONAL` : "UP TO 20 FILES"}</span></div><h2>2. 필요한 사진에만 이야기를 더해주세요.</h2><p>사진 설명은 선택사항입니다. 장소, 날짜, 메뉴처럼 사진만으로 알 수 없는 정보가 있을 때만 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 20장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요 <small>(선택)</small></strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="선택사항 · 예: 여행 2일차에 방문한 식당, 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
-function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
+function Ideas({ ideas, loading, error, ready, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; ready: boolean; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
   return (
     <div className="content ideas-screen">
       <div className="page-heading">
@@ -657,7 +815,7 @@ function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContin
       </div>
       <div className="idea-footer">
         <button className="secondary-button" onClick={onBack}>← 요청 수정</button>
-        <button className="primary-button" disabled={!selectedIdea || loading} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button>
+        <button className="primary-button" disabled={!selectedIdea || loading || !ready} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button>
       </div>
     </div>
   );

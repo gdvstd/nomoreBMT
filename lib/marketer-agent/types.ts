@@ -14,6 +14,14 @@ export const marketerAssetSchema = z.object({
   height: z.number().positive().optional(),
 });
 
+export const marketerReferenceAssetSchema = z.object({
+  assetId: z.string(),
+  instagramUrl: z.string().url(),
+  imageUrl: z.string().url(),
+  sourceSlideIndex: z.number().int().positive(),
+  designNotes: z.array(z.string()).default([]),
+});
+
 export const marketerAgentInputSchema = z.object({
   taskId: z.string(),
   request: z.string().min(1),
@@ -26,6 +34,11 @@ export const marketerAgentInputSchema = z.object({
     assetSetId: z.string(),
     items: z.array(marketerAssetSchema).min(1),
   }),
+  references: z
+    .object({
+      items: z.array(marketerReferenceAssetSchema).max(6),
+    })
+    .optional(),
 });
 
 export const marketerIdeaCardSchema = z.object({
@@ -37,6 +50,7 @@ export const marketerIdeaCardSchema = z.object({
   format: z.string(),
   assets: z.array(z.string()).min(1),
   assetIds: z.array(z.string()).default([]),
+  referenceAssetIds: z.array(z.string()).max(2).default([]),
   slides: z.array(z.string()).min(3).max(12),
   accent: z.enum(["coral", "blue"]),
 });

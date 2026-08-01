@@ -9,6 +9,7 @@ export type Idea = {
   format: string;
   assets: string[];
   assetIds?: string[];
+  referenceAssetIds?: string[];
   slides: string[];
   accent: "coral" | "blue";
 };

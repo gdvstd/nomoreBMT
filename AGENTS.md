@@ -57,7 +57,7 @@ Content-Type: application/json
 
 다음 요청에는 `skills/scout-instagram-references/SKILL.md`를 사용한다.
 
-- 사용자 주제와 유사한 Instagram 게시물 검색
+- Apify를 이용한 사용자 주제와 유사한 Instagram 게시물 검색
 - 더 강한 reference 또는 인기 사례 탐색
 - 현재 사용되는 hook, 카드뉴스 구조, 시각 패턴 조사
 - reference에서 적용할 요소와 피할 요소 추출
@@ -82,7 +82,7 @@ Content-Type: application/json
   "timeRange": "30d",
   "region": "KR",
   "formatFocus": "carousel",
-  "maxReferences": 5
+  "maxReferences": 3
 }
 ```
 
@@ -90,7 +90,12 @@ Content-Type: application/json
 
 - `timeRange`: `7d`, `30d`, `90d`, `any`
 - `formatFocus`: `carousel`, `reel`, `single_image`, `all`
-- `maxReferences`: 1~8
+- `maxReferences`: 1~3
+
+Apify가 관련 hashtag와 공개 게시물 후보를 수집하며, 현재 MVP는 단일 이미지와
+캐러셀만 사용하고 릴스와 동영상 게시물은 제외한다. 누락된 좋아요, 댓글,
+좋아요 또는 댓글 수가 누락되면 공개 반응 점수를 계산하지 않고 `null`로
+유지한다. 작성자 follower 수는 조회하거나 점수 계산에 사용하지 않는다.
 
 반환된 `context.references`, `context.patterns`,
 `context.editorContext`를 편집자 Agent에 전달한다. 사용자에게 결과를 보여줄
@@ -155,6 +160,7 @@ Content-Type: application/json
 OPENAI_API_KEY
 OPENAI_MODEL
 OPENAI_REFERENCE_MODEL
+APIFY_API_TOKEN
 INSTAGRAM_ACCESS_TOKEN
 INSTAGRAM_API_VERSION
 ```
