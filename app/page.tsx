@@ -5,7 +5,18 @@ import dynamic from "next/dynamic";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
 
-type UploadedAsset = { name: string; dataUrl: string };
+type UploadedAsset = {
+  id: string;
+  name: string;
+  previewUrl: string;
+  description: string;
+  dataUrl: string;
+};
+
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+
 
 const EditorPlaneMount = dynamic(() => import("@/app/components/EditorPlaneMount"), {
   ssr: false,
@@ -37,6 +48,7 @@ export default function Home() {
   const [ideas, setIdeas] = useState<Idea[]>(mockIdeas);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasError, setIdeasError] = useState("");
+  const [fileError, setFileError] = useState("");
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [renderedPost, setRenderedPost] = useState<RenderedPost | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
@@ -48,16 +60,48 @@ export default function Home() {
   }, [brandText]);
 
   async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
-    const selected = Array.from(event.target.files ?? []);
-    const loaded = await Promise.all(selected.map(async (file) => ({
+    const incoming = Array.from(event.target.files ?? []);
+    const invalidFormat = incoming.filter((file) => {
+      const lowerName = file.name.toLowerCase();
+      return !ALLOWED_IMAGE_TYPES.has(file.type) || !ALLOWED_IMAGE_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
+    });
+    const oversized = incoming.filter((file) => file.size > MAX_IMAGE_SIZE);
+    const valid = incoming.filter((file) => !invalidFormat.includes(file) && !oversized.includes(file));
+
+    if (invalidFormat.length > 0) {
+      setFileError("JPG, JPEG, PNG, WEBP 형식의 이미지만 올릴 수 있어요.");
+    } else if (oversized.length > 0) {
+      setFileError("이미지 한 장의 크기는 20MB 이하여야 해요.");
+    } else {
+      setFileError("");
+    }
+
+    const selected = await Promise.all(valid.map(async (file) => ({
+      id: crypto.randomUUID(),
       name: file.name,
+      previewUrl: URL.createObjectURL(file),
       dataUrl: await readFileAsDataUrl(file),
+      description: "",
     })));
-    setFiles((previous) => [...previous, ...loaded].slice(0, 30));
+    setFiles((previous) => {
+      const combined = [...previous, ...selected];
+      combined.slice(30).forEach((file) => URL.revokeObjectURL(file.previewUrl));
+      return combined.slice(0, 30);
+    });
+    event.target.value = "";
   }
 
   function removeFile(index: number) {
-    setFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index));
+    setFiles((previous) => {
+      URL.revokeObjectURL(previous[index].previewUrl);
+      return previous.filter((_, fileIndex) => fileIndex !== index);
+    });
+  }
+
+  function updateFileDescription(index: number, description: string) {
+    setFiles((previous) => previous.map((file, fileIndex) => (
+      fileIndex === index ? { ...file, description } : file
+    )));
   }
 
   function chooseIdea(idea: Idea) {
@@ -96,6 +140,7 @@ export default function Home() {
               kind: "image",
               name: file.name,
               url: file.dataUrl,
+              description: file.description,
             })),
           },
         }),
@@ -165,7 +210,7 @@ export default function Home() {
         )}
 
         {screen === "brief" && (
-          <Brief brief={brief} setBrief={setBrief} files={files} onFiles={handleFiles} onRemoveFile={removeFile} onBack={() => setScreen("dashboard")} onContinue={generateIdeas} />
+          <Brief brief={brief} setBrief={setBrief} files={files} fileError={fileError} onFiles={handleFiles} onRemoveFile={removeFile} onDescriptionChange={updateFileDescription} onBack={() => setScreen("dashboard")} onContinue={generateIdeas} loading={ideasLoading} error={ideasError} />
         )}
 
         {screen === "ideas" && (
@@ -198,8 +243,21 @@ function Dashboard({ brandText, onNewProject }: { brandText: string; onNewProjec
   return <div className="content"><div className="page-heading"><div><div className="content-kicker">WORKSPACE / OVERVIEW</div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote">“{brandText}”</div><div className="profile-tags"><span>여행</span><span>맛집</span><span>따뜻한 톤</span></div><button className="text-button">프로필 자세히 보기 →</button></div><div className="activity-panel"><div className="section-label">RECENT PROJECTS <span>01</span></div><div className="project-row"><div className="project-art art-coast"><span>강릉</span></div><div className="project-info"><strong>강릉 미식 여행</strong><span>아이디어 선택 대기 중 · 오늘</span></div><span className="status-pill">DRAFT</span></div><button className="empty-project" onClick={onNewProject}>+ 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>TIP</span><p>사진이 많을수록 좋아요. 한 번의 여행에서 발견한 장면을 한꺼번에 올려보세요.</p></div></div>;
 }
 
-function Brief({ brief, setBrief, files, onFiles, onRemoveFile, onBack, onContinue }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onBack: () => void; onContinue: () => void }) {
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>무엇을<br /><em>만들어볼까요?</em></h1><p className="heading-description">사진을 올리고, 이번 게시물에서 전하고 싶은 이야기를 알려주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="brief-grid"><div className="upload-card"><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><label className="upload-zone"><input type="file" accept="image/*" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, PNG · 사진은 비공개로 안전하게 보관됩니다</span></label>{files.length > 0 && <div className="file-list">{files.map((file, index) => <div className="file-row" key={`${file.name}-${index}`}><span className="file-thumb">{String(index + 1).padStart(2, "0")}</span><span>{file.name}</span><button onClick={() => onRemoveFile(index)} aria-label={`${file.name} 제거`}>×</button></div>)}</div>}</div><div className="brief-form"><div className="section-label">THE BRIEF</div><label htmlFor="brief">이번 게시물로 무엇을 전하고 싶나요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 강릉에서 다녀온 맛집들을 추천하는 저장용 캐러셀을 만들어줘. 사진의 따뜻한 분위기는 살리고, 정보도 한눈에 들어오게 해줘." /><div className="brief-hint"><span>✦</span> 장소명, 제품명, 반드시 넣을 정보를 함께 적어주면 더 좋아요.</div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 이전</button><button className="primary-button" disabled={!brief.trim() || files.length === 0} onClick={onContinue}>아이디어 받아보기 <span>→</span></button></div></div></div></div>;
+function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
+  const [activeAssetIndex, setActiveAssetIndex] = useState(0);
+  const isReady = brief.trim() && files.length > 0 && files.every((file) => file.description.trim());
+  const safeAssetIndex = Math.min(activeAssetIndex, Math.max(files.length - 1, 0));
+  const activeAsset = files[safeAssetIndex];
+  const visibleAssetIndexes = files
+    .map((_, index) => index)
+    .filter((index) => Math.abs(index - safeAssetIndex) <= 1);
+
+  function removeActiveFile() {
+    onRemoveFile(safeAssetIndex);
+    setActiveAssetIndex((current) => Math.max(0, Math.min(current, files.length - 2)));
+  }
+
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint"><span>✦</span> 여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자유롭게 적어주세요.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel"><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetIndex((index) => Math.max(0, index - 1))}>‹</button><div className="asset-carousel-track">{visibleAssetIndexes.map((index) => { const file = files[index]; const isActive = index === safeAssetIndex; return <button className={`asset-carousel-slide ${isActive ? "active" : "side"}`} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} /><span>{String(index + 1).padStart(2, "0")}</span></button>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetIndex((index) => Math.min(files.length - 1, index + 1))}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div><button type="button" onClick={removeActiveFile}>사진 삭제</button></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 남세현짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /><div className="asset-file-name">{activeAsset.name}</div></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
 function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
