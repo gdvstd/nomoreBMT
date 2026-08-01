@@ -3,11 +3,14 @@
 import { useEffect, useRef } from "react";
 import type { BrandContext } from "@/lib/onboarding/types";
 import type { EditorInput } from "@/lib/editor-input/types";
+import type { EditorInputGenerationAttempt } from "@/lib/editor-input/types";
 import type { EditorPlaneResult, Idea } from "@/lib/types";
 
 type Props = {
   projectId: string;
   editorInput: EditorInput;
+  editorInputTraceId?: string;
+  editorInputAttempts?: EditorInputGenerationAttempt[];
   idea: Idea;
   task: string;
   brandText: string;
@@ -24,7 +27,7 @@ type Props = {
  * does not need to know anything about Vue. The real OpenPencil runtime can
  * replace VueEditorPlane without changing this host contract.
  */
-export default function EditorPlaneMount({ projectId, editorInput, idea, task, brandText, assetItems, brandContext, onBack, onFinish }: Props) {
+export default function EditorPlaneMount({ projectId, editorInput, editorInputTraceId, editorInputAttempts, idea, task, brandText, assetItems, brandContext, onBack, onFinish }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const callbacksRef = useRef({ onBack, onFinish });
   callbacksRef.current = { onBack, onFinish };
@@ -39,6 +42,8 @@ export default function EditorPlaneMount({ projectId, editorInput, idea, task, b
       vueApp = vue.createApp(module.default, {
         projectId,
         editorInput,
+        editorInputTraceId,
+        editorInputAttempts,
         ideaTitle: idea.title,
         ideaId: idea.id,
         ideaHook: idea.hook,
@@ -61,7 +66,7 @@ export default function EditorPlaneMount({ projectId, editorInput, idea, task, b
       disposed = true;
       vueApp?.unmount();
     };
-  }, [assetItems, brandContext, brandText, editorInput, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, projectId, task]);
+  }, [assetItems, brandContext, brandText, editorInput, editorInputAttempts, editorInputTraceId, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, projectId, task]);
 
   return <div ref={mountRef} className="vue-editor-mount" aria-label="BMT editor plane" />;
 }

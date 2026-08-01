@@ -73,24 +73,26 @@ export const editorAgentInputSchema = z.object({
   brandContext: z.unknown().optional(),
   marketerContext: z.unknown().optional(),
 }).superRefine((value, context) => {
-  const requiredSlideCount = value.assets.items.length + 1;
-  if (value.editorInput.slides.length !== requiredSlideCount) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["editorInput", "slides"],
-      message: `Expected one cover plus one slide per asset (${requiredSlideCount} total).`,
-    });
-  }
   if (
     value.task.cardCount !== undefined &&
-    value.task.cardCount !== requiredSlideCount
+    value.task.cardCount !== value.editorInput.slides.length
   ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["task", "cardCount"],
-      message: `cardCount must be ${requiredSlideCount}.`,
+      message: `cardCount must match EditorInput (${value.editorInput.slides.length}).`,
     });
   }
+  const knownAssetIds = new Set(value.assets.items.map((asset) => asset.assetId));
+  value.editorInput.slides.forEach((slide, index) => {
+    if (!slide.sourceAssetId || !knownAssetIds.has(slide.sourceAssetId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["editorInput", "slides", index, "sourceAssetId"],
+        message: "Every slide must reference a supplied user asset.",
+      });
+    }
+  });
   if (value.openPencil.assetNodeIds.length !== value.assets.items.length) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

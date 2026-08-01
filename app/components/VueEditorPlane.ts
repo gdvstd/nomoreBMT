@@ -1,4 +1,4 @@
-import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from "vue";
 import { ALL_TOOLS, CORE_TOOLS, type ToolDef } from "@open-pencil/core/tools";
 import { FigmaAPI } from "@open-pencil/core/figma-api";
 import { createEditor, type Tool } from "@open-pencil/core/editor";
@@ -13,11 +13,17 @@ import { provideEditor, useCanvas } from "../../node_modules/@open-pencil/vue/di
 import { useCanvasInput } from "../../node_modules/@open-pencil/vue/dist/canvas/useCanvasInput.js";
 import type { EditorInput } from "@/lib/editor-input/types";
 
-type Mode = "auto" | "live" | "review";
+type Mode = "auto" | "live";
 
 type Props = {
   projectId: string;
   editorInput: EditorInput;
+  editorInputTraceId?: string;
+  editorInputAttempts?: Array<{
+    attempt: number;
+    status: "started" | "retrying" | "completed" | "failed";
+    message: string;
+  }>;
   ideaId: string;
   ideaTitle: string;
   ideaHook: string;
@@ -62,7 +68,6 @@ type CarouselValidation = {
 const modeCopy: Record<Mode, { label: string; caption: string; description: string }> = {
   auto: { label: "Auto", caption: "자동 진행", description: "편집 과정은 접어두고, 완성될 때까지 BMT가 작업을 진행해요." },
   live: { label: "Live", caption: "실시간 편집", description: "사진을 자르고 배치하는 과정을 캔버스에서 실시간으로 확인해요." },
-  review: { label: "Review", caption: "최종 검토", description: "완성된 레이어를 확인하고, 게시하기 전에 직접 다듬을 수 있어요." },
 };
 
 type PlanStep = {
@@ -95,6 +100,8 @@ const VueEditorPlane = defineComponent({
   props: {
     projectId: { type: String, required: true },
     editorInput: { type: Object, required: true },
+    editorInputTraceId: { type: String, required: false },
+    editorInputAttempts: { type: Array, required: false, default: () => [] },
     ideaId: { type: String, required: true },
     ideaTitle: { type: String, required: true },
     ideaHook: { type: String, required: true },
@@ -166,6 +173,7 @@ const VueEditorPlane = defineComponent({
     const exportedCardImages = ref<string[]>([]);
     const finalAgentOutput = ref<AgentOutput | null>(null);
     const assetCloneIds = new Set<string>();
+    let postReviewTransitionStarted = false;
 
     function pushAgentEvent(kind: AgentLogEntry["kind"], label: string, detail?: string) {
       agentEventLog.value = [{
@@ -247,11 +255,6 @@ const VueEditorPlane = defineComponent({
     const cardCount = props.editorInput.slides.length;
     if (cardCount === 0) {
       throw new Error("선택한 아이디어에 슬라이드 계획이 없습니다.");
-    }
-    if (cardCount !== props.assetItems.length + 1) {
-      throw new Error(
-        `슬라이드는 표지 1장과 사진별 본문으로 구성되어야 해요. 현재 사진 ${props.assetItems.length}장, 슬라이드 ${cardCount}장이에요.`,
-      );
     }
     const cardColumns = Math.min(3, cardCount);
     const cardGap = 120;
@@ -370,6 +373,79 @@ const VueEditorPlane = defineComponent({
       ];
     }
 
+    function collectImageNodeIds(
+      nodeId: string,
+      visited = new Set<string>(),
+    ): string[] {
+      if (visited.has(nodeId)) return [];
+      visited.add(nodeId);
+      const node = editor.graph.getNode(nodeId);
+      if (!node) return [];
+      const ownIds = node.fills.some(
+        (paint) => paint.type === "IMAGE" && paint.visible !== false,
+      ) ? [node.id] : [];
+      return [
+        ...ownIds,
+        ...node.childIds.flatMap((childId) =>
+          collectImageNodeIds(childId, visited),
+        ),
+      ];
+    }
+
+    function collectVisibleTextNodeIds(
+      nodeId: string,
+      visited = new Set<string>(),
+    ): string[] {
+      if (visited.has(nodeId)) return [];
+      visited.add(nodeId);
+      const node = editor.graph.getNode(nodeId);
+      if (!node || node.visible === false) return [];
+      const ownIds = node.type === "TEXT" && node.text.trim() ? [node.id] : [];
+      return [
+        ...ownIds,
+        ...node.childIds.flatMap((childId) =>
+          collectVisibleTextNodeIds(childId, visited),
+        ),
+      ];
+    }
+
+    function pathFromCard(cardId: string, nodeId: string) {
+      const reversed: string[] = [];
+      let current = editor.graph.getNode(nodeId);
+      const visited = new Set<string>();
+      while (current && !visited.has(current.id)) {
+        reversed.push(current.id);
+        if (current.id === cardId) return reversed.reverse();
+        visited.add(current.id);
+        current = current.parentId
+          ? editor.graph.getNode(current.parentId)
+          : undefined;
+      }
+      return [];
+    }
+
+    function imagePaintsBelowText(
+      cardId: string,
+      imageNodeId: string,
+      textNodeId: string,
+    ) {
+      const imagePath = pathFromCard(cardId, imageNodeId);
+      const textPath = pathFromCard(cardId, textNodeId);
+      if (!imagePath.length || !textPath.length) return false;
+      let divergence = 0;
+      while (
+        divergence < imagePath.length
+        && divergence < textPath.length
+        && imagePath[divergence] === textPath[divergence]
+      ) divergence += 1;
+      if (divergence === imagePath.length) return true;
+      if (divergence === textPath.length) return false;
+      const commonParent = editor.graph.getNode(imagePath[divergence - 1]);
+      if (!commonParent) return false;
+      return commonParent.childIds.indexOf(imagePath[divergence])
+        < commonParent.childIds.indexOf(textPath[divergence]);
+    }
+
     function nodeContainsLiteralNewline(nodeId: string, visited = new Set<string>()): boolean {
       if (visited.has(nodeId)) return false;
       visited.add(nodeId);
@@ -402,11 +478,19 @@ const VueEditorPlane = defineComponent({
         if (node.childIds.length === 0) errors.push(`Card ${index + 1}: contains no visual children.`);
 
         const imageHashes = collectImageFillHashes(nodeId);
+        const imageNodeIds = collectImageNodeIds(nodeId);
+        const textNodeIds = collectVisibleTextNodeIds(nodeId);
         const hasImage = imageHashes.length > 0;
         if (imageHashes.length !== 1) {
           errors.push(`Card ${index + 1}: expected exactly one visible user image fill, found ${imageHashes.length}.`);
         }
-        const expectedAssetIndex = index === 0 ? 0 : index - 1;
+        const expectedAssetId = props.editorInput.slides[index]?.sourceAssetId;
+        const expectedAssetIndex = props.assetItems.findIndex(
+          (asset) => asset.assetId === expectedAssetId,
+        );
+        if (expectedAssetIndex < 0) {
+          errors.push(`Card ${index + 1}: source asset ${expectedAssetId ?? "missing"} is unavailable.`);
+        }
         const expectedAssetNodeId = assetNodeIds[expectedAssetIndex];
         const expectedImageHash = expectedAssetNodeId
           ? collectImageFillHashes(expectedAssetNodeId)[0]
@@ -416,10 +500,58 @@ const VueEditorPlane = defineComponent({
           imageHashes.length === 1 &&
           imageHashes[0] !== expectedImageHash
         ) {
-          errors.push(`Card ${index + 1}: image does not match upload ${expectedAssetIndex + 1}.`);
+          errors.push(`Card ${index + 1}: image does not match source asset ${expectedAssetId}.`);
         }
         if (nodeContainsLiteralNewline(nodeId)) {
           errors.push(`Card ${index + 1}: contains a literal \\n sequence in text.`);
+        }
+        const expectedTextCount = props.editorInput.slides[index]?.text?.length ?? 0;
+        if (textNodeIds.length < expectedTextCount) {
+          errors.push(
+            `Card ${index + 1}: expected at least ${expectedTextCount} visible text layers, found ${textNodeIds.length}.`,
+          );
+        }
+        for (const imageNodeId of imageNodeIds) {
+          for (const textNodeId of textNodeIds) {
+            if (!imagePaintsBelowText(nodeId, imageNodeId, textNodeId)) {
+              errors.push(
+                `Card ${index + 1}: image layer ${imageNodeId} paints above text ${textNodeId}. Move the image below all text layers.`,
+              );
+              break;
+            }
+          }
+        }
+        const cardBounds = editor.graph.getAbsoluteBounds(nodeId);
+        const expectsFullBleed = /full[- ]?bleed|풀\s*블리드|100%|전체를?\s*채/i.test(
+          props.editorInput.slides[index]?.imageDescription ?? "",
+        );
+        if (expectsFullBleed && imageNodeIds.length > 0) {
+          const coversCard = imageNodeIds.some((imageNodeId) => {
+            const imageBounds = editor.graph.getAbsoluteBounds(imageNodeId);
+            const widthRatio = imageBounds.width / Math.max(1, cardBounds.width);
+            const heightRatio = imageBounds.height / Math.max(1, cardBounds.height);
+            return widthRatio >= 0.98
+              && heightRatio >= 0.98
+              && imageBounds.x <= cardBounds.x + 2
+              && imageBounds.y <= cardBounds.y + 2
+              && imageBounds.x + imageBounds.width >= cardBounds.x + cardBounds.width - 2
+              && imageBounds.y + imageBounds.height >= cardBounds.y + cardBounds.height - 2;
+          });
+          if (!coversCard) {
+            errors.push(
+              `Card ${index + 1}: EditorInput requires full-bleed, but no image reaches all four edges. Resize/move IMAGE_SLOT and IMAGE_LAYER to x=0, y=0, 1080x1350.`,
+            );
+          }
+        }
+        for (const textNodeId of textNodeIds) {
+          const textBounds = editor.graph.getAbsoluteBounds(textNodeId);
+          const outside = textBounds.x < cardBounds.x
+            || textBounds.y < cardBounds.y
+            || textBounds.x + textBounds.width > cardBounds.x + cardBounds.width
+            || textBounds.y + textBounds.height > cardBounds.y + cardBounds.height;
+          if (outside) {
+            errors.push(`Card ${index + 1}: text ${textNodeId} extends outside the card.`);
+          }
         }
 
         bounds.push({ index, x: node.x, y: node.y, width: node.width, height: node.height });
@@ -432,7 +564,7 @@ const VueEditorPlane = defineComponent({
           childCount: node.childIds.length,
           hasImage,
           imageCount: imageHashes.length,
-          expectedAssetId: props.assetItems[expectedAssetIndex]?.assetId,
+          expectedAssetId,
         };
       });
 
@@ -507,11 +639,6 @@ const VueEditorPlane = defineComponent({
       // Accepting the unwrapped shape as a fallback keeps this adapter
       // compatible with direct OpenPencil transports too.
       const request = payload.request ?? payload;
-
-      if (mode.value === "review") {
-        await postBridgeResponse(request.requestId, { error: "Editor is in review mode" });
-        return;
-      }
 
       if (request.toolName === "validate_carousel") {
         await postBridgeResponse(request.requestId, {
@@ -609,6 +736,11 @@ const VueEditorPlane = defineComponent({
             visible: true,
           });
           if (parent.type === "FRAME") editor.updateNode(parent.id, { clipsContent: true });
+          // OpenPencil appendChild makes the newly reparented image frontmost.
+          // Keep an asset clone at the back of its destination so it cannot
+          // cover overlay and text siblings even when a model chooses the card
+          // root instead of the recommended IMAGE_SLOT.
+          editor.graph.reorderChild(toolArgs.id, parent.id, 0);
           rawResult = {
             ...(rawResult as Record<string, unknown>),
             placement: {
@@ -618,6 +750,7 @@ const VueEditorPlane = defineComponent({
               height: parent.height,
               cardIndex: findCardIndexForNode(parent.id),
               imageFillPreserved: nodeContainsImage(toolArgs.id),
+              paintOrder: "backmost-child",
             },
           };
         }
@@ -826,29 +959,11 @@ const VueEditorPlane = defineComponent({
                 layerIds[`card-${index + 1}`] = id;
               });
             }
-            const validation = validateCarousel();
-            if (!validation.ok) {
-              agentError.value = validation.errors.join(" · ");
-              currentReasoning.value = `완료 검증 실패: ${agentError.value}`;
-              recentTool.value = "validate_carousel 실패";
-              pushAgentEvent("status", "완료 검증 실패", agentError.value);
-              progress.value = Math.min(progress.value, 99);
-              return;
-            }
-            try {
-              await ensureCarouselExports();
-            } catch (error) {
-              agentError.value = error instanceof Error ? error.message : String(error);
-              currentReasoning.value = `최종 이미지 생성 실패: ${agentError.value}`;
-              recentTool.value = "export_image 실패";
-              pushAgentEvent("status", "최종 이미지 생성 실패", agentError.value);
-              progress.value = Math.min(progress.value, 99);
-              return;
-            }
-            progress.value = 100;
-            planSteps.value = planSteps.value.map((step) => ({ ...step, status: "complete" }));
-            currentReasoning.value = "편집 작업이 완료됐어요.";
-            pushAgentEvent("status", currentReasoning.value, "completed");
+            currentReasoning.value = "최종 이미지를 준비하고 게시물 검토로 이동하고 있어요.";
+            recentTool.value = "최종 검증 · export_image";
+            progress.value = Math.max(progress.value, 99);
+            pushAgentEvent("status", currentReasoning.value, "transitioning");
+            await finishToPostReview();
           }
           if (agentEvent?.type === "status" && agentEvent.status === "needs_input") {
             const unresolved = agentEvent.output?.unresolved?.filter(Boolean).join(" · ");
@@ -936,17 +1051,18 @@ const VueEditorPlane = defineComponent({
     });
     const currentTask = computed(() => planSteps.value.findIndex((step) => step.status === "active"));
     const isComplete = computed(() => progress.value >= 100);
-    const availableModes = computed<Mode[]>(() => (isComplete.value ? ["auto", "review"] : ["auto", "live"]));
-    watch(isComplete, (complete) => {
-      if (complete && mode.value === "live") mode.value = "review";
-    });
+    const availableModes = computed<Mode[]>(() => ["auto", "live"]);
 
-    async function finishToReview() {
+    async function finishToPostReview() {
+      if (postReviewTransitionStarted) return;
+      postReviewTransitionStarted = true;
       const validation = validateCarousel();
       if (!validation.ok) {
         agentError.value = validation.errors.join(" · ");
         currentReasoning.value = `최종 검증 실패: ${agentError.value}`;
         pushAgentEvent("status", "최종 검증 실패", agentError.value);
+        progress.value = Math.min(progress.value, 99);
+        postReviewTransitionStarted = false;
         return;
       }
       try {
@@ -955,8 +1071,14 @@ const VueEditorPlane = defineComponent({
         agentError.value = error instanceof Error ? error.message : String(error);
         currentReasoning.value = `최종 이미지 생성 실패: ${agentError.value}`;
         pushAgentEvent("status", "최종 이미지 생성 실패", agentError.value);
+        progress.value = Math.min(progress.value, 99);
+        postReviewTransitionStarted = false;
         return;
       }
+      progress.value = 100;
+      planSteps.value = planSteps.value.map((step) => ({ ...step, status: "complete" }));
+      currentReasoning.value = "편집이 완료되어 게시물 검토로 이동합니다.";
+      pushAgentEvent("status", currentReasoning.value, "completed");
       const output = finalAgentOutput.value;
       const slides = cardRootIds.map((nodeId, index) => {
         const metadata = output?.slides?.find((slide) => slide.nodeId === nodeId)
@@ -976,6 +1098,17 @@ const VueEditorPlane = defineComponent({
         caption: output?.caption?.trim() || `${props.ideaTitle}\n\n${props.ideaHook}`,
         contactSheetImageUrl: exportedImage.value ?? undefined,
         summary: output?.summary,
+        diagnostics: {
+          plannerTraceId: props.editorInputTraceId,
+          editorTraceId: agentTraceId.value ?? undefined,
+          editorInput: props.editorInput,
+          eventLog: agentEventLog.value.map(({ kind, label, detail }) => ({
+            kind,
+            label,
+            detail,
+          })),
+          finalOutput: output,
+        },
       });
     }
 
@@ -991,9 +1124,8 @@ const VueEditorPlane = defineComponent({
 
     function setMode(nextMode: Mode) {
       if (nextMode === "live" && isComplete.value) return;
-      if (nextMode === "review" && !isComplete.value) return;
       mode.value = nextMode;
-      if (nextMode === "live" || nextMode === "review") scheduleCardOverviewFit();
+      if (nextMode === "live") scheduleCardOverviewFit();
       if (agentSessionId.value) {
         void fetch(`/api/editor-bridge/${agentSessionId.value}/mode`, {
           method: "PATCH",
@@ -1040,13 +1172,7 @@ const VueEditorPlane = defineComponent({
     function layerRow(id: string, label: string, kind: string) {
       return h("button", {
         class: ["vue-layer-row", selectedLayer.value === id && "selected"],
-        disabled: mode.value !== "review",
-        onClick: () => {
-          if (mode.value !== "review") return;
-          selectedLayer.value = id;
-          const nodeId = layerIds[id];
-          if (nodeId) editor.select([nodeId]);
-        },
+        disabled: true,
       }, [
         h("span", { class: `vue-layer-icon ${kind}` }, kind === "text" ? "T" : kind === "image" ? "▧" : "✦"),
         h("span", { class: "vue-layer-name" }, label),
@@ -1055,7 +1181,7 @@ const VueEditorPlane = defineComponent({
     }
 
     function canvas() {
-      const interactive = mode.value === "review";
+      const interactive = false;
       return h("div", { class: "vue-canvas-wrap" }, [
         h("div", { class: "vue-canvas-toolbar" }, [
           childText("1080 × 1350", "vue-canvas-size"),
@@ -1067,7 +1193,7 @@ const VueEditorPlane = defineComponent({
           actionButton("실행 취소", "↶", () => editor.undoAction(), interactive),
           actionButton("다시 실행", "↷", () => editor.redoAction(), interactive),
           actionButton("화면에 맞추기", "⌕", () => fitCardOverview(visibleCanvasElement), interactive),
-          childText(interactive ? "Review / EDIT" : "Live / READ ONLY", "vue-canvas-zoom"),
+          childText("Live / READ ONLY", "vue-canvas-zoom"),
         ]),
         h("div", { class: ["open-pencil-surface-host", !interactive && "readonly"] }, [
           h(OpenPencilCanvas, { interactive, autoFit: true }),
@@ -1125,6 +1251,44 @@ const VueEditorPlane = defineComponent({
       ]);
     }
 
+    function editorInputView() {
+      const attempts = props.editorInputAttempts ?? [];
+      return h("details", { class: "vue-editor-input-details" }, [
+        h("summary", null, [
+          h("span", null, [
+            h("strong", null, "EDITOR INPUT"),
+            h("small", null, `${cardCount} slides · structured brief`),
+          ]),
+          h("span", null, "JSON 보기 +"),
+        ]),
+        h("div", { class: "vue-editor-input-body" }, [
+          h("div", { class: "vue-editor-input-meta" }, [
+            props.editorInputTraceId
+              ? h("span", { title: props.editorInputTraceId }, `PLANNER TRACE ${props.editorInputTraceId.slice(-10)}`)
+              : h("span", null, "PLANNER TRACE 없음"),
+            h("span", null, `${attempts.length || 1} attempt${attempts.length === 1 ? "" : "s"}`),
+          ]),
+          h("p", { class: "vue-editor-input-design" }, props.editorInput.design.description),
+          h("div", { class: "vue-editor-input-slides" }, props.editorInput.slides.map((slide, index) => h("div", { class: "vue-editor-input-slide" }, [
+            h("span", null, String(index + 1).padStart(2, "0")),
+            h("div", null, [
+              h("strong", null, props.ideaSlides[index] ?? `Slide ${index + 1}`),
+              h("p", null, slide.description),
+              h("small", null, `${slide.sourceAssetId ?? "asset 미지정"} · ${slide.text?.length ?? 0} text layers`),
+            ]),
+          ]))),
+          attempts.length
+            ? h("div", { class: "vue-editor-input-attempts" }, attempts.map((attempt) => h("p", null, [
+                h("span", null, `TRY ${attempt.attempt}`),
+                h("strong", null, attempt.status),
+                h("small", null, attempt.message),
+              ])))
+            : null,
+          h("pre", null, JSON.stringify(props.editorInput, null, 2)),
+        ]),
+      ]);
+    }
+
     function autoView() {
       return h("div", { class: "vue-auto-view" }, [
         h("div", { class: "vue-auto-hero" }, [
@@ -1136,7 +1300,9 @@ const VueEditorPlane = defineComponent({
           h("div", { class: "vue-progress-track" }, [h("span", { style: { width: `${progress.value}%` } })]),
         ]),
         progressList(),
-        h("div", { class: "vue-auto-note" }, [h("span", null, "◎"), h("p", null, isComplete.value ? "모든 편집 작업이 끝났어요. 결과를 검토해주세요." : "편집 plane은 접혀 있어요. 작업은 계속 진행됩니다."), h("button", { onClick: () => setMode(isComplete.value ? "review" : "live") }, isComplete.value ? "Review 열기 →" : "실시간 편집 보기 →")]),
+        editorInputView(),
+        agentStreamView(),
+        h("div", { class: "vue-auto-note" }, [h("span", null, "◎"), h("p", null, isComplete.value ? "게시물 검토 화면으로 이동하고 있어요." : "편집 plane은 접혀 있어요. 작업은 계속 진행됩니다."), isComplete.value ? null : h("button", { onClick: () => setMode("live") }, "실시간 편집 보기 →")]),
       ]);
     }
 
@@ -1147,45 +1313,11 @@ const VueEditorPlane = defineComponent({
           h("div", { class: "vue-inspector-heading" }, [h("span", { class: "vue-kicker" }, "LIVE EDITING"), h("strong", null, isComplete.value ? "완료" : "작업 중")]),
           h("div", { class: "vue-live-task" }, [h("span", { class: "vue-pulse" }), h("span", null, isComplete.value ? "최종 렌더링을 확인하세요" : `${planSteps.value[currentTask.value < 0 ? 0 : currentTask.value]?.label ?? "편집 계획"}을 진행하고 있어요`)]),
           h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "에이전트 작업 중 · 캔버스 읽기 전용")]),
+          editorInputView(),
           agentStreamView(),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "CARD ROOTS"), ...cardRootIds.map((_, index) => layerRow(`card-${index + 1}`, `card ${String(index + 1).padStart(2, "0")}`, "shape"))]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "ASSETS IN USE"), h("div", { class: "vue-asset-chips" }, (props.ideaAssets as string[]).map((asset) => h("span", { class: "vue-asset-chip" }, asset)))]),
-          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "편집 환경 준비 완료" : agentError.value || "편집 준비 중"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
-        ]),
-      ]);
-    }
-
-    function reviewControls() {
-      return h("div", { class: "vue-review-tools" }, [
-        h("div", { class: "vue-inspector-label" }, "QUICK EDIT"),
-        h("div", { class: "vue-review-tool-grid" }, [
-          h("button", { onClick: () => editor.selectAll() }, "전체 선택"),
-          h("button", { onClick: () => editor.duplicateSelected() }, "복제"),
-          h("button", { onClick: () => editor.deleteSelected() }, "삭제"),
-          h("button", { onClick: () => editor.nudgeSelected(-1, 0) }, "← 1px"),
-          h("button", { onClick: () => editor.nudgeSelected(1, 0) }, "1px →"),
-          h("button", { onClick: () => editor.nudgeSelected(0, -1) }, "↑ 1px"),
-          h("button", { onClick: () => editor.nudgeSelected(0, 1) }, "↓ 1px"),
-        ]),
-        h("p", { class: "vue-review-tool-hint" }, "캔버스에서 요소를 선택한 뒤 드래그하거나, 도구와 단축 조작으로 미세 조정하세요."),
-      ]);
-    }
-
-    function reviewView() {
-      return h("div", { class: "vue-review-view" }, [
-        canvas(),
-        h("aside", { class: "vue-review-panel" }, [
-          h("span", { class: "vue-kicker" }, "REVIEW MODE"),
-          h("h2", null, isComplete.value ? "이제 당신의\n감각을 더해주세요." : "거의 다 됐어요."),
-          h("p", null, isComplete.value ? modeCopy.review.description : "편집이 끝나면 이 화면에서 레이어를 직접 검토할 수 있어요."),
-          h("div", { class: "vue-review-checks" }, [
-            h("div", null, [h("span", null, "✓"), h("p", null, [h("strong", null, "정보 흐름"), h("small", null, "저장하고 싶은 순서로 구성됨")])]),
-            h("div", null, [h("span", null, "✓"), h("p", null, [h("strong", null, "브랜드 톤"), h("small", null, "따뜻한 이미지와 짧은 문장")])]),
-            h("div", null, [h("span", null, "✓"), h("p", null, [h("strong", null, "출력 규격"), h("small", null, "인스타그램 캐러셀 1080 × 1350")])]),
-          ]),
-          reviewControls(),
-          h("button", { class: "vue-finish-button", disabled: !isComplete.value, onClick: () => void finishToReview() }, isComplete.value ? "게시물 검토로 이동 →" : "편집 완료를 기다리는 중"),
-          h("button", { class: "vue-secondary-link", onClick: () => setMode("auto") }, "← 진행상황으로 돌아가기"),
+          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "완료되면 게시물 검토로 자동 이동합니다" : agentError.value || "편집 준비 중"), h("button", { onClick: () => setMode("auto") }, "진행상황 보기 →")]),
         ]),
       ]);
     }
@@ -1199,7 +1331,7 @@ const VueEditorPlane = defineComponent({
       ]),
       modeTabs(),
       h("div", { class: "vue-mode-description" }, [h("span", null, modeCopy[mode.value].caption), h("p", null, modeCopy[mode.value].description)]),
-      mode.value === "auto" ? autoView() : mode.value === "live" ? liveView() : reviewView(),
+      mode.value === "auto" ? autoView() : liveView(),
       h("div", { class: "editor-plane-footer-actions" }, [h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),
     ]);
   },

@@ -62,21 +62,54 @@ that was not applied to the document.
    set_image_fill. Only call set_image_fill when actual base64 image_data is
    available. Never finish with only
    seeded placeholder rectangles.
-   The image mapping is fixed: card 1 is the cover and uses assetNodeIds[0];
-   card 2 also uses assetNodeIds[0]; card 3 uses assetNodeIds[1], continuing
-   in upload order. Every card must contain exactly one visible user-image
-   fill. Never make a collage, add a second user image, skip an asset, or
-   change this order.
-6. Compose the cards using OpenPencil tools: create or update frames, place and
-   crop assets, set fills/strokes/layout, and set text. Keep each card as a
-   separately addressable root node.
+   The image mapping is specified per slide by EditorInput.sourceAssetId.
+   Resolve that asset ID through the ASSET MANIFEST to the matching ordered
+   assetNodeId. A source may be reused on multiple cards when instructed, but
+   each placement must begin with clone_node. Every card must contain exactly
+   one visible user-image fill. Never substitute another upload merely because
+   it is earlier in manifest order.
+   Geometry is mandatory: a full-bleed IMAGE_SLOT is exactly x=0, y=0,
+   width=1080, height=1350 in its card. Immediately after reparent, call
+   node_move and node_resize on the cloned IMAGE_LAYER, then get_node to confirm
+   its local bounds. For a contained image, translate the natural-language
+   region into explicit x/y/width/height before calling tools. Never leave a
+   small source-sized image in a corner or a large accidental empty black area.
+   Crop around the requested subject anchor rather than distorting the photo.
+6. Compose every card with an explicit named layer stack. The required order
+   from back to front is CARD_BACKGROUND, IMAGE_SLOT containing IMAGE_LAYER,
+   optional CONTRAST_OVERLAY, decorative layers, then TEXT_* layers. Create the
+   IMAGE_SLOT before placing the image. Clone the assigned asset and reparent
+   it into IMAGE_SLOT, never directly into the card root or a container that
+   also owns text. A newly appended image is frontmost and will hide text, so
+   never append an image after text at the same hierarchy level. In render JSX,
+   put the image slot before overlays and text. Keep all text as later siblings
+   above the image. Use a contrast overlay whenever text sits on photography.
+   Do not use a full-card image frame when EditorInput reserves a separate text
+   region. Keep each card as a separately addressable root node.
+   Do not render an empty IMAGE_LAYER placeholder. Render only IMAGE_SLOT,
+   overlay, decoration, and text scaffold; the cloned user-image node itself is
+   the IMAGE_LAYER. Reparent that clone into IMAGE_SLOT and resize it. This
+   avoids two competing image nodes and makes get_jsx unambiguous.
+   Every CONTRAST_OVERLAY must be translucent at creation (normally opacity
+   0.20-0.45). An opaque overlay hides the photo and is always a failure. If a
+   tool cannot set opacity, remove/re-render the overlay with explicit opacity;
+   never proceed with a solid full-card rectangle above the image.
 7. After each meaningful step, call report_progress with phase
    "step_completed" and the actual percent, then continue to the next step.
 8. Call export_image with one card root ID at a time after meaningful
    composition changes so every 1080x1350 card can be inspected at full size.
-   Treat each image as a visual verification checkpoint and refine spacing,
-   hierarchy, contrast, cropping, and legibility when needed. An {error: ...}
+   Treat each image as a visual verification checkpoint. For every exported
+   card explicitly verify: the assigned photo is visible; every EditorInput
+   text string is visible; no photo covers any text; text stays inside the card;
+   contrast is readable; crop preserves the requested subject; and the card is
+   not merely a full-bleed photo. If any check fails, inspect get_node/get_jsx,
+   repair layer order or geometry, and export that card again. An {error: ...}
    result is a failed checkpoint, not an image.
+   Compare the export against EditorInput.imageDescription: if it says
+   full-bleed, the image must visibly reach all four card edges; if contained,
+   the non-image region must contain the specified text/graphic composition.
+   A mostly blank card or an image occupying only a corner is a failed visual
+   checkpoint even when validate_carousel reports an image fill.
 9. After the final mutation and per-card visual checks, call
    validate_carousel. Repair every returned error and call it again. Do not
    mutate the document after it returns ok=true unless you validate again.
@@ -90,9 +123,14 @@ that was not applied to the document.
 Design constraints:
 - Treat the supplied EditorInput as the authoritative slide count, visible
   text, shared design direction, per-slide composition, and user-image mapping.
-- The final slide count must be assets.items.length + 1. The first card is a
-  cover based on the first user photo; every later card maps one-to-one to the
-  user photos in manifest order and contains exactly one user image.
+- The final slide count must equal EditorInput.slides.length. For each card,
+  follow its sourceAssetId and imageDescription for source choice, focal crop,
+  scale, placement, tone, overlay, and relation to text.
+- Follow every text item's description as well as its content, size, color,
+  and font. Keep all visible text inside the 1080x1350 card safe area.
+- Complete one card at a time: structure, assigned image, all requested text,
+  get_node/get_jsx hierarchy check, visual export check, then progress to the
+  next card. Do not batch all images after creating all text layers.
 - Design-reference images are visual evidence only. Never place them in the
   finished composition; only user-photo URLs may become slide imagery.
 - Follow the provided design principles and idea card before adding stylistic
@@ -102,6 +140,11 @@ Design constraints:
 - Never claim that a card is complete when a tool failed or a visual checkpoint
   was not completed. If the bridge or an asset is unavailable, report
   needs_input or failed with a concrete unresolved item.
+- A parse error, invalid tool argument, wrong node target, opaque overlay, or
+  bad geometry is not a reason to return needs_input. Inspect the latest
+  get_node/get_jsx result, correct the call with the existing tools, and keep
+  working. Use needs_input only when information or an external capability is
+  genuinely absent, not when the current composition needs repair.
 `;
 
 function safeJson(value: unknown): string {
