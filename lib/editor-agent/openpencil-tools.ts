@@ -1,0 +1,211 @@
+import { tool, type RunContext, type ToolOutputImage } from "@openai/agents";
+import {
+  ALL_TOOLS,
+  CORE_TOOLS,
+  type ParamDef,
+  type ToolDef,
+} from "@open-pencil/core/tools";
+import { z } from "zod";
+
+import type {
+  EditorAgentRunContext,
+  OpenPencilBridge,
+  OpenPencilToolResult,
+} from "./types";
+
+const EXPORT_IMAGE_TOOL_NAME = "export_image";
+
+/**
+ * Convert OpenPencil's canonical parameter description into a strict Zod
+ * object. Defaults are intentionally not copied into the schema: OpenPencil's
+ * own execute functions remain responsible for applying their defaults.
+ */
+export function openPencilParamsToZod(
+  params: Record<string, ParamDef>,
+): z.ZodObject<z.ZodRawShape> {
+  const shape: Record<string, z.ZodTypeAny> = {};
+
+  for (const [name, definition] of Object.entries(params)) {
+    let value: z.ZodTypeAny;
+
+    switch (definition.type) {
+      case "number": {
+        let numberValue = z.number();
+        if (definition.min !== undefined) numberValue = numberValue.min(definition.min);
+        if (definition.max !== undefined) numberValue = numberValue.max(definition.max);
+        value = numberValue;
+        break;
+      }
+      case "boolean":
+        value = z.boolean();
+        break;
+      case "string[]":
+        value = z.array(z.string());
+        break;
+      case "color":
+      case "string":
+      default:
+        value = definition.enum?.length
+          ? z.enum(definition.enum as [string, ...string[]])
+          : z.string();
+        break;
+    }
+
+    value = value.describe(definition.description);
+    shape[name] = definition.required ? value : value.optional();
+  }
+
+  return z.object(shape).strict();
+}
+
+/**
+ * OpenPencil owns the tool definitions. This function only selects the
+ * canonical definitions to expose to the editor agent. `export_image` is
+ * added because visual verification is part of the editor loop.
+ */
+export function getOpenPencilToolDefs(options?: {
+  includeUnsafe?: boolean;
+}): ToolDef[] {
+  const core = [...CORE_TOOLS];
+  const exportImage = ALL_TOOLS.find((candidate) => candidate.name === EXPORT_IMAGE_TOOL_NAME);
+  const defs = exportImage && !core.some((candidate) => candidate.name === exportImage.name)
+    ? [...core, exportImage]
+    : core;
+
+  // CORE_TOOLS remains the default surface, including OpenPencil's canonical
+  // `eval` definition. Deployments that do not want arbitrary code execution
+  // can opt out without changing any tool names or schemas.
+  return options?.includeUnsafe === false
+    ? defs.filter((candidate) => candidate.name !== "eval")
+    : defs;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Convert OpenPencil's export_image result to an Agents SDK image output. */
+export function toAgentToolOutput(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+
+  if (typeof result.base64 === "string" && typeof result.mimeType === "string") {
+    const output: ToolOutputImage = {
+      type: "image",
+      image: { data: result.base64, mediaType: result.mimeType },
+      detail: "high",
+    };
+    return output;
+  }
+
+  if (typeof result.url === "string") {
+    const output: ToolOutputImage = {
+      type: "image",
+      image: { url: result.url },
+      detail: "high",
+    };
+    return output;
+  }
+
+  return result;
+}
+
+function getRunContext(
+  context: RunContext<EditorAgentRunContext> | undefined,
+): EditorAgentRunContext {
+  if (!context?.context) {
+    throw new Error("Editor agent tool invoked without an EditorAgentRunContext");
+  }
+  return context.context;
+}
+
+/**
+ * Adapt one canonical OpenPencil ToolDef to the OpenAI Agents SDK function
+ * tool contract. Names, descriptions, and parameter semantics stay exactly
+ * those defined by OpenPencil; only the transport is changed.
+ */
+export function openPencilToolToAgentTool(definition: ToolDef) {
+  return tool({
+    name: definition.name,
+    description: definition.description,
+    parameters: openPencilParamsToZod(definition.params),
+    strict: true,
+    execute: async (
+      args: Record<string, unknown>,
+      context?: RunContext<EditorAgentRunContext>,
+    ) => {
+      const runContext = getRunContext(context);
+
+      if (runContext.mode === "review") {
+        throw new Error("Editor tools are paused while the user is in review mode");
+      }
+
+      runContext.onEvent?.({ type: "tool_started", toolName: definition.name, args });
+
+      try {
+        const response: OpenPencilToolResult = await runContext.bridge.invoke({
+          runId: runContext.runId,
+          toolName: definition.name,
+          args,
+          expectedRevision: runContext.graphRevision,
+        });
+
+        runContext.graphRevision = response.graphRevision ?? runContext.graphRevision;
+        const result = definition.name === EXPORT_IMAGE_TOOL_NAME
+          ? toAgentToolOutput(response.result)
+          : response.result;
+
+        const eventResult = definition.name === EXPORT_IMAGE_TOOL_NAME && isRecord(response.result)
+          ? {
+              mimeType: response.result.mimeType,
+              byteLength: response.result.byteLength,
+              visualCheckpoint: true,
+            }
+          : result;
+
+        runContext.onEvent?.({
+          type: "tool_finished",
+          toolName: definition.name,
+          result: eventResult,
+          graphRevision: runContext.graphRevision,
+        });
+
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        runContext.onEvent?.({ type: "tool_failed", toolName: definition.name, error: message });
+        throw error;
+      }
+    },
+  });
+}
+
+export function createOpenPencilAgentTools(options?: {
+  toolDefs?: ToolDef[];
+  includeUnsafe?: boolean;
+}) {
+  const definitions = options?.toolDefs ?? getOpenPencilToolDefs({
+    includeUnsafe: options?.includeUnsafe,
+  });
+  return definitions.map(openPencilToolToAgentTool);
+}
+
+/** Execute canonical OpenPencil tools directly against a browser-owned FigmaAPI. */
+export function createFigmaApiBridge(
+  figma: Parameters<ToolDef["execute"]>[0],
+  options?: { getGraphRevision?: () => string | undefined },
+): OpenPencilBridge {
+  const definitions = new Map(getOpenPencilToolDefs({ includeUnsafe: true }).map((definition) => [definition.name, definition]));
+
+  return {
+    async invoke(request) {
+      const definition = definitions.get(request.toolName);
+      if (!definition) throw new Error(`Unknown OpenPencil tool: ${request.toolName}`);
+
+      const result = await definition.execute(figma, request.args);
+      return {
+        result,
+        graphRevision: options?.getGraphRevision?.(),
+      };
+    },
+  };
+}

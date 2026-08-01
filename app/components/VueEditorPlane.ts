@@ -1,4 +1,6 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
+import { ALL_TOOLS, CORE_TOOLS, type ToolDef } from "@open-pencil/core/tools";
+import { FigmaAPI } from "@open-pencil/core/figma-api";
 import { createEditor, type Tool } from "@open-pencil/core/editor";
 // Import the two focused Vue composable modules directly. OpenPencil 0.13.2's
 // package barrel currently references optional worker files that are not shipped
@@ -11,9 +13,17 @@ import { useCanvasInput } from "../../node_modules/@open-pencil/vue/dist/canvas/
 type Mode = "auto" | "live" | "review";
 
 type Props = {
+  ideaId: string;
   ideaTitle: string;
+  ideaHook: string;
+  ideaDescription: string;
+  ideaAssetIds: string[];
+  ideaSlides: string[];
   ideaFormat: string;
   ideaAssets: string[];
+  task: string;
+  brandText: string;
+  assetNames: string[];
   onBack: () => void;
   onFinish: () => void;
 };
@@ -44,9 +54,17 @@ function progressState(progress: number, index: number) {
 const VueEditorPlane = defineComponent({
   name: "VueEditorPlane",
   props: {
+    ideaId: { type: String, required: true },
     ideaTitle: { type: String, required: true },
+    ideaHook: { type: String, required: true },
+    ideaDescription: { type: String, required: true },
+    ideaAssetIds: { type: Array, required: true },
+    ideaSlides: { type: Array, required: true },
     ideaFormat: { type: String, required: true },
     ideaAssets: { type: Array, required: true },
+    task: { type: String, required: true },
+    brandText: { type: String, required: true },
+    assetNames: { type: Array, required: true },
     onBack: { type: Function, required: true },
     onFinish: { type: Function, required: true },
   },
@@ -58,6 +76,16 @@ const VueEditorPlane = defineComponent({
     const editor = createEditor({
       getViewportSize: () => ({ width: 960, height: 620 }),
     });
+    const figma = new FigmaAPI(editor.graph);
+    const agentConnected = ref(false);
+    const agentError = ref("");
+    const agentSessionId = ref<string | null>(null);
+    let agentStream: EventSource | undefined;
+
+    const browserToolDefs = new Map<string, ToolDef>([
+      ...CORE_TOOLS,
+      ...ALL_TOOLS.filter((definition) => definition.name === "export_image"),
+    ].map((definition) => [definition.name, definition]));
 
     // Seed a real OpenPencil document. The editor agent can replace this graph
     // with generated assets and layouts without changing the host UI contract.
@@ -113,6 +141,133 @@ const VueEditorPlane = defineComponent({
     text("secondary photo / label", "PHOTO 17", 143, 700, 170, 34, 14, "#ffffff", 700);
     text("body / description", "사진 속 장소를 동선으로 엮어\n저장하고 싶은 여행 가이드로.", 96, 565, 480, 100, 22, "#332e29", 500);
     text("footer / signature", "BMT / SEYEON.STUDIO                                      01", 92, 1240, 890, 36, 15, "#332e29", 600);
+    figma.currentPage.selection = Object.values(layerIds)
+      .map((id) => figma.getNodeById(id))
+      .filter((node): node is NonNullable<typeof node> => node !== null);
+
+    async function postBridgeResponse(requestId: string, payload: Record<string, unknown>) {
+      const sessionId = agentSessionId.value;
+      if (!sessionId) return;
+      await fetch(`/api/editor-bridge/${sessionId}/response`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId, ...payload }),
+      });
+    }
+
+    async function executeAgentTool(event: MessageEvent<string>) {
+      const request = JSON.parse(event.data) as {
+        requestId: string;
+        toolName: string;
+        args: Record<string, unknown>;
+      };
+
+      if (mode.value === "review") {
+        await postBridgeResponse(request.requestId, { error: "Editor is in review mode" });
+        return;
+      }
+
+      const definition = browserToolDefs.get(request.toolName);
+      if (!definition) {
+        await postBridgeResponse(request.requestId, { error: `Unknown OpenPencil tool: ${request.toolName}` });
+        return;
+      }
+
+      try {
+        // The canvas lifecycle installs the renderer on the editor. Keeping
+        // FigmaAPI pointed at the same renderer makes export_image verify the
+        // exact graph the user sees.
+        if (editor.renderer) figma.setRenderer(editor.renderer);
+        const result = await definition.execute(figma, request.args);
+        progress.value = Math.min(96, progress.value + 4);
+        await postBridgeResponse(request.requestId, {
+          result,
+          graphRevision: String(Date.now()),
+        });
+      } catch (error) {
+        await postBridgeResponse(request.requestId, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    async function startAgent() {
+      const browserContextId = crypto.randomUUID();
+      const response = await fetch(`/api/projects/${browserContextId}/editor/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: {
+            id: browserContextId,
+            request: props.task,
+            target: "instagram_carousel",
+            language: "ko",
+            cardCount: props.ideaSlides.length || 7,
+          },
+          ideaCard: {
+            id: props.ideaId,
+            title: props.ideaTitle,
+            hook: props.ideaHook,
+            description: props.ideaDescription,
+            format: props.ideaFormat,
+            assets: props.ideaAssets,
+            assetIds: props.ideaAssetIds,
+            slides: props.ideaSlides,
+          },
+          assets: {
+            assetSetId: browserContextId,
+            items: props.assetNames.map((name, index) => ({
+              assetId: `${browserContextId}-asset-${index + 1}`,
+              kind: "image",
+              name,
+            })),
+          },
+          openPencil: {
+            sessionId: browserContextId,
+            targetNodeIds: Object.values(layerIds),
+            canvasWidth: 1080,
+            canvasHeight: 1350,
+          },
+          designPrinciples: {
+            rules: [
+              "Keep the provided brand voice and Korean copy concise.",
+              "Use the user's supplied assets before introducing substitutes.",
+              "Preserve a clear hierarchy and readable contrast at 1080 × 1350.",
+              props.brandText ? `Brand direction: ${props.brandText}` : "",
+            ].filter(Boolean),
+          },
+          marketerContext: { source: "BMT idea card", ideaId: props.ideaId },
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        agentError.value = payload?.error ?? "Editor agent를 시작하지 못했어요";
+        return;
+      }
+
+      const payload = await response.json() as { bridgeSessionId: string };
+      agentSessionId.value = payload.bridgeSessionId;
+      agentConnected.value = true;
+      agentStream = new EventSource(`/api/editor-bridge/${payload.bridgeSessionId}/stream`);
+      agentStream.addEventListener("tool_call", executeAgentTool as unknown as EventListener);
+      agentStream.addEventListener("agent_event", (event) => {
+        const detail = JSON.parse((event as MessageEvent<string>).data) as { event?: { type?: string; status?: string; message?: string } };
+        const agentEvent = detail.event;
+        if (agentEvent?.type === "tool_started") {
+          progress.value = Math.min(94, progress.value + 2);
+        }
+        if (agentEvent?.type === "status" && agentEvent.status === "completed") {
+          progress.value = 100;
+        }
+        if (agentEvent?.type === "status" && agentEvent.status === "failed") {
+          agentError.value = agentEvent.message ?? "Editor agent 작업이 실패했어요";
+        }
+      });
+      agentStream.addEventListener("error", () => {
+        agentError.value = "Editor bridge 연결이 끊겼어요";
+      });
+    }
 
     provideEditor(editor);
     editor.setTool("SELECT");
@@ -159,20 +314,31 @@ const VueEditorPlane = defineComponent({
     });
 
     onMounted(() => {
+      void startAgent();
       timer = setInterval(() => {
-        if (progress.value >= 100) return;
+        // Keep the visual MVP progress fallback only when no server agent is
+        // configured. A connected agent advances progress from real tool calls.
+        if (agentConnected.value || progress.value >= 100) return;
         progress.value = Math.min(100, progress.value + 2);
       }, 900);
     });
 
     onBeforeUnmount(() => {
       if (timer) clearInterval(timer);
+      agentStream?.close();
     });
 
     function setMode(nextMode: Mode) {
       if (nextMode === "live" && isComplete.value) return;
       if (nextMode === "review" && !isComplete.value) return;
       mode.value = nextMode;
+      if (agentSessionId.value) {
+        void fetch(`/api/editor-bridge/${agentSessionId.value}/mode`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: nextMode }),
+        });
+      }
     }
 
     function setTool(tool: Tool) {
@@ -280,7 +446,7 @@ const VueEditorPlane = defineComponent({
           h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "에이전트 작업 중 · 캔버스 읽기 전용")]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "LAYERS"), layerRow("headline", "headline / text", "text"), layerRow("main-photo", "main photo / crop", "image"), layerRow("route-map", "route map / image", "image"), layerRow("sticker", "spark / sticker", "shape")]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "ASSETS IN USE"), h("div", { class: "vue-asset-chips" }, (props.ideaAssets as string[]).map((asset) => h("span", { class: "vue-asset-chip" }, asset)))]),
-          h("div", { class: "vue-live-foot" }, [h("span", null, "AI commands are mocked"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
+          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "OpenPencil tools connected" : agentError.value || "Agent 준비 중"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
         ]),
       ]);
     }
