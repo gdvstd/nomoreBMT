@@ -9,6 +9,9 @@ create table if not exists public.user_brand_contexts (
   updated_at timestamptz not null default now()
 );
 
+grant usage on schema public to authenticated;
+grant select, insert, update on table public.user_brand_contexts to authenticated;
+
 alter table public.user_brand_contexts enable row level security;
 
 create policy "Users can read their own brand context"

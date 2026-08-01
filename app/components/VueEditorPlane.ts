@@ -689,14 +689,13 @@ const VueEditorPlane = defineComponent({
       return h("div", { class: "vue-auto-view" }, [
         h("div", { class: "vue-auto-hero" }, [
           h("div", { class: "vue-live-orb" }, "✦"),
-          h("div", null, [h("span", { class: "vue-kicker" }, "EDITOR AGENT / AUTO MODE"), h("h2", null, "좋은 흐름을\n자동으로 만들고 있어요."), h("p", null, modeCopy.auto.description)]),
+          h("div", null, [h("span", { class: "vue-kicker" }, "AUTO LAYOUT"), h("h2", null, "좋은 흐름을\n자동으로 만들고 있어요."), h("p", null, modeCopy.auto.description)]),
         ]),
         h("div", { class: "vue-auto-progress" }, [
           h("div", { class: "vue-progress-heading" }, [h("span", null, isComplete.value ? "편집이 완료됐어요" : "편집 중이에요"), h("strong", null, `${progress.value}%`)]),
           h("div", { class: "vue-progress-track" }, [h("span", { style: { width: `${progress.value}%` } })]),
         ]),
         progressList(),
-        agentStreamView(),
         h("div", { class: "vue-auto-note" }, [h("span", null, "◎"), h("p", null, isComplete.value ? "모든 편집 작업이 끝났어요. 결과를 검토해주세요." : "편집 plane은 접혀 있어요. 작업은 계속 진행됩니다."), h("button", { onClick: () => setMode(isComplete.value ? "review" : "live") }, isComplete.value ? "Review 열기 →" : "실시간 편집 보기 →")]),
       ]);
     }
@@ -707,11 +706,10 @@ const VueEditorPlane = defineComponent({
         h("aside", { class: "vue-editor-inspector" }, [
           h("div", { class: "vue-inspector-heading" }, [h("span", { class: "vue-kicker" }, "LIVE EDITING"), h("strong", null, isComplete.value ? "완료" : "작업 중")]),
           h("div", { class: "vue-live-task" }, [h("span", { class: "vue-pulse" }), h("span", null, isComplete.value ? "최종 렌더링을 확인하세요" : `${planSteps.value[currentTask.value < 0 ? 0 : currentTask.value]?.label ?? "편집 계획"}을 진행하고 있어요`)]),
-          h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "에이전트 작업 중 · 캔버스 읽기 전용")]),
-          agentStreamView(),
+          h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "자동 편집 중 · 캔버스 읽기 전용")]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "LAYERS"), layerRow("headline", "headline / text", "text"), layerRow("main-photo", "main photo / crop", "image"), layerRow("route-map", "route map / image", "image"), layerRow("sticker", "spark / sticker", "shape")]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "ASSETS IN USE"), h("div", { class: "vue-asset-chips" }, (props.ideaAssets as string[]).map((asset) => h("span", { class: "vue-asset-chip" }, asset)))]),
-          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "OpenPencil tools connected" : agentError.value || "Agent 준비 중"), agentTraceId.value ? h("small", { title: agentTraceId.value }, `trace ${agentTraceId.value.slice(-10)}`) : null, h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
+          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "편집 환경 준비 완료" : agentError.value || "편집 준비 중"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
         ]),
       ]);
     }
@@ -753,8 +751,8 @@ const VueEditorPlane = defineComponent({
 
     return () => h("section", { class: "editor-plane-shell" }, [
       h("div", { class: "editor-plane-heading" }, [
-        h("div", null, [h("div", { class: "vue-kicker" }, "EDITOR AGENT / 04"), h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")]), h("p", null, `${props.ideaTitle} · ${props.ideaFormat}`)]),
-        h("div", { class: "editor-plane-actions" }, [h("span", { class: "vue-agent-badge" }, [h("i", null, "●"), " OPENPENCIL EDITOR"]), h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),
+        h("div", null, [h("div", { class: "vue-kicker" }, "POST EDITOR / 04"), h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")]), h("p", null, `${props.ideaTitle} · ${props.ideaFormat}`)]),
+        h("div", { class: "editor-plane-actions" }, [h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),
       ]),
       modeTabs(),
       h("div", { class: "vue-mode-description" }, [h("span", null, modeCopy[mode.value].caption), h("p", null, modeCopy[mode.value].description)]),

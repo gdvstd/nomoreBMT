@@ -2,7 +2,9 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import type { User } from "@supabase/supabase-js";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
+import { AuthScreen } from "@/app/components/AuthScreen";
 import {
   brandContextSchema,
   brandContextToAgentText,
@@ -16,6 +18,7 @@ import {
   saveOnboardingProfile,
   type OnboardingStorageResult,
 } from "@/lib/onboarding/storage";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
 
 type UploadedAsset = {
@@ -61,6 +64,9 @@ function readFileAsDataUrl(file: File) {
 }
 
 export default function Home() {
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [onboardingAnswers, setOnboardingAnswers] = useState<OnboardingAnswers>({ ...EMPTY_ONBOARDING_ANSWERS });
   const [brandContext, setBrandContext] = useState<BrandContext | null>(null);
@@ -81,6 +87,44 @@ export default function Home() {
   const [activeSlide, setActiveSlide] = useState(0);
   const marketerStream = useRef<EventSource | null>(null);
 
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    let active = true;
+    const loadingTimeout = window.setTimeout(() => {
+      if (!active) return;
+      setAuthUser(null);
+      setAuthLoading(false);
+    }, 8000);
+
+    void supabase.auth.getUser()
+      .then(({ data }) => {
+        if (!active) return;
+        setAuthUser(data.user);
+        setAuthLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAuthUser(null);
+        setAuthLoading(false);
+      })
+      .finally(() => window.clearTimeout(loadingTimeout));
+
+    const { data: authState } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      window.clearTimeout(loadingTimeout);
+      authState.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
   useEffect(() => () => {
     marketerStream.current?.close();
   }, []);
@@ -95,7 +139,14 @@ export default function Home() {
   }, [brandContext]);
 
   useEffect(() => {
+    if (authLoading || !authUser) return;
+
     let active = true;
+
+    setScreen("onboarding");
+    setOnboardingAnswers({ ...EMPTY_ONBOARDING_ANSWERS });
+    setBrandContext(null);
+    setStorageMode(null);
 
     void loadOnboardingProfile().then((saved) => {
       if (!active || !saved) return;
@@ -108,7 +159,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [authLoading, authUser]);
 
   async function completeOnboarding(answers: OnboardingAnswers) {
     const normalizedAnswers = {
@@ -356,11 +407,18 @@ export default function Home() {
     }
   }
 
+  if (authLoading) {
+    return <main className="auth-shell"><div className="auth-loading">워크스페이스를 불러오는 중…</div></main>;
+  }
+
+  if (!authUser) {
+    return <AuthScreen supabase={supabase} />;
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand-mark"><span>B</span> BMT</div>
-        <div className="brand-subtitle">BRAND MOTION TOOLKIT</div>
+        <div className="brand-mark"><span>NOMORE</span><b>BMT</b></div>
 
         <div className="sidebar-block">
           <div className="eyebrow">YOUR WORKSPACE</div>
@@ -389,15 +447,11 @@ export default function Home() {
           <div className="mini-label">BRAND NOTE</div>
           <p>{profileSummary}</p>
           <button className="quiet-button" onClick={() => setScreen("onboarding")}>브랜드 프로필 수정 <span>↗</span></button>
+          <button className="quiet-button auth-logout" onClick={() => void supabase?.auth.signOut()}>로그아웃 <span>↗</span></button>
         </div>
       </aside>
 
       <section className="main-panel">
-        <header className="topbar">
-          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b><strong>{screen === "onboarding" ? "ONBOARDING" : screen === "editor" ? "EDITOR PLANE" : "NEW PROJECT"}</strong></div>
-          <div className="topbar-actions"><button className="help-button">? <span>도움말</span></button><div className="profile-chip">SY</div></div>
-        </header>
-
         {screen === "onboarding" && (
           <Onboarding initialAnswers={onboardingAnswers} onSubmit={completeOnboarding} />
         )}
@@ -411,7 +465,7 @@ export default function Home() {
         )}
 
         {screen === "ideas" && (
-          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} currentReasoning={ideasCurrentReasoning} recentTool={ideasRecentTool} eventLog={ideasEventLog} streamText={ideasStreamText} traceId={ideasTraceId} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
+          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
         {screen === "editor" && selectedIdea && brandContext && (
@@ -436,6 +490,7 @@ function Onboarding({
   const [answers, setAnswers] = useState(initialAnswers);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showRequired, setShowRequired] = useState(false);
 
   useEffect(() => {
     setAnswers(initialAnswers);
@@ -447,12 +502,21 @@ function Onboarding({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!complete) {
+      setShowRequired(true);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       await onSubmit(answers);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "온보딩을 저장하지 못했어요");
+      const errorMessage = submitError instanceof Error
+        ? submitError.message
+        : submitError && typeof submitError === "object" && "message" in submitError
+          ? String(submitError.message)
+          : "온보딩을 저장하지 못했어요";
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -461,21 +525,19 @@ function Onboarding({
   const complete = Object.values(answers).every((answer) => answer.trim());
 
   return <div className="content onboarding-screen">
-    <div className="content-kicker">WELCOME TO BMT <span>✦</span></div>
-    <div className="onboarding-grid">
-      <div className="intro-copy"><h1>당신의 이야기가<br /><em>브랜드</em>가 되는 곳.</h1><p>몇 가지 답변을 바탕으로 모든 마케터·편집 작업에 공통으로 쓰일 브랜드 컨텍스트를 만들어요.</p><div className="intro-note"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div></div>
+    <div className="onboarding-grid onboarding-form-only">
       <form className="form-card onboarding-form" onSubmit={submit}>
-        <div className="form-card-top"><span className="card-index">01 — 05</span><span className="required">ALL REQUIRED</span></div>
+        <div className="form-card-top"><span className="card-index">01 — 05</span></div>
+        <div className="onboarding-form-intro"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div>
         <div className="identity-fields">
-          <label className="qa-field" htmlFor="accountName"><span>계정 이름</span><input id="accountName" value={answers.accountName} onChange={(event) => updateAnswer("accountName", event.target.value)} placeholder="예: 소도시 식탁" maxLength={80} /></label>
-          <label className="qa-field" htmlFor="instagramHandle"><span>Instagram ID</span><div className="handle-input"><b>@</b><input id="instagramHandle" value={answers.instagramHandle} onChange={(event) => updateAnswer("instagramHandle", event.target.value)} placeholder="smallcity.table" maxLength={64} autoCapitalize="none" /></div></label>
+          <label className={`qa-field ${showRequired && !answers.accountName.trim() ? "missing" : ""}`} htmlFor="accountName"><span>계정 이름 <b>*</b></span><input id="accountName" aria-invalid={showRequired && !answers.accountName.trim()} value={answers.accountName} onChange={(event) => updateAnswer("accountName", event.target.value)} placeholder="예: 소도시 식탁" maxLength={80} /><small className={showRequired && !answers.accountName.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+          <label className={`qa-field ${showRequired && !answers.instagramHandle.trim() ? "missing" : ""}`} htmlFor="instagramHandle"><span>Instagram ID <b>*</b></span><div className="handle-input"><b>@</b><input id="instagramHandle" aria-invalid={showRequired && !answers.instagramHandle.trim()} value={answers.instagramHandle} onChange={(event) => updateAnswer("instagramHandle", event.target.value)} placeholder="smallcity.table" maxLength={64} autoCapitalize="none" /></div><small className={showRequired && !answers.instagramHandle.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         </div>
-        <label className="qa-field" htmlFor="desiredMood"><span>어떤 mood를 원하세요?</span><textarea id="desiredMood" value={answers.desiredMood} onChange={(event) => updateAnswer("desiredMood", event.target.value)} placeholder="예: 따뜻하고 차분하지만 정보는 빠르게 읽히는 분위기" maxLength={500} /></label>
-        <label className="qa-field" htmlFor="mainTopics"><span>주로 어떤 주제를 다루시나요?</span><textarea id="mainTopics" value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집, 카페와 시장" maxLength={500} /></label>
-        <label className="qa-field" htmlFor="preferredFormats"><span>유지하고 싶은 format이 있나요?</span><textarea id="preferredFormats" value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 카드뉴스, 마지막 장에는 저장 CTA" maxLength={500} /></label>
+        <label className={`qa-field ${showRequired && !answers.desiredMood.trim() ? "missing" : ""}`} htmlFor="desiredMood"><span>어떤 mood를 원하세요? <b>*</b></span><textarea id="desiredMood" aria-invalid={showRequired && !answers.desiredMood.trim()} value={answers.desiredMood} onChange={(event) => updateAnswer("desiredMood", event.target.value)} placeholder="예: 따뜻하고 차분하지만 정보는 빠르게 읽히는 분위기" maxLength={500} /><small className={showRequired && !answers.desiredMood.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+        <label className={`qa-field ${showRequired && !answers.mainTopics.trim() ? "missing" : ""}`} htmlFor="mainTopics"><span>주로 어떤 주제를 다루시나요? <b>*</b></span><textarea id="mainTopics" aria-invalid={showRequired && !answers.mainTopics.trim()} value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집" maxLength={500} /><small className={showRequired && !answers.mainTopics.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+        <label className={`qa-field ${showRequired && !answers.preferredFormats.trim() ? "missing" : ""}`} htmlFor="preferredFormats"><span>유지하고 싶은 format이 있나요? <b>*</b></span><textarea id="preferredFormats" aria-invalid={showRequired && !answers.preferredFormats.trim()} value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 정도의 카드뉴스, 비속어는 사용하지 않기" maxLength={500} /><small className={showRequired && !answers.preferredFormats.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         {error && <div className="onboarding-error"><span>!</span>{error}</div>}
-        <button className="primary-button onboarding-submit" disabled={!complete || loading} type="submit">{loading ? "브랜드 컨텍스트 만드는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
-        <p className="storage-note">답변은 이 기기에 먼저 저장되며, 로그인된 Supabase 계정이 있으면 사용자 DB에도 동기화됩니다.</p>
+        <button className="primary-button onboarding-submit" disabled={loading} type="submit">{loading ? "브랜드 컨텍스트 만드는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
       </form>
     </div>
   </div>;
@@ -510,54 +572,24 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDes
   return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint"><span>✦</span> 여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자유롭게 적어주세요.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel"><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetIndex((index) => Math.max(0, index - 1))}>‹</button><div className="asset-carousel-track">{visibleAssetIndexes.map((index) => { const file = files[index]; const isActive = index === safeAssetIndex; return <button className={`asset-carousel-slide ${isActive ? "active" : "side"}`} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} /><span>{String(index + 1).padStart(2, "0")}</span></button>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetIndex((index) => Math.min(files.length - 1, index + 1))}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div><button type="button" onClick={removeActiveFile}>사진 삭제</button></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 남세현짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /><div className="asset-file-name">{activeAsset.name}</div></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
-function Ideas({ ideas, loading, error, currentReasoning, recentTool, eventLog, streamText, traceId, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; currentReasoning: string; recentTool: string; eventLog: AgentLogEntry[]; streamText: string; traceId: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
-  const streamPreview = streamText.replace(/\s+/g, " ").trim().slice(-260);
-  const fallbackEvent: AgentLogEntry = { id: "waiting", kind: "status", label: "run 시작 대기 중" };
+function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
   return (
     <div className="content ideas-screen">
       <div className="page-heading">
         <div>
-          <div className="content-kicker">MARKETER AGENT / 02</div>
+          <div className="content-kicker">CONTENT DIRECTION / 02</div>
           <h1>두 가지 방향을<br /><em>준비했어요.</em></h1>
           <p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p>
         </div>
-        <div className="agent-status">
-          <span className={`status-orb ${loading ? "" : "green"}`} /> {loading ? "MARKETER AGENT / STREAMING" : "MARKETER AGENT"}
-          <br />
-          <small>{loading ? "ONE INFERENCE · LIVE" : "2 IDEAS READY"}</small>
-          {traceId && <small title={traceId}>TRACE {traceId.slice(-10)}</small>}
-        </div>
       </div>
-      {error && <div className="brief-hint"><span>!</span> {error} · 현재 화면은 mock 아이디어입니다.</div>}
+      {error && <div className="brief-hint"><span>!</span> {error}</div>}
       <div className="idea-grid">
         {loading ? (
           <div className="idea-card idea-card-stream" aria-busy="true">
             <div className="idea-card-body">
-              <div className="idea-label">MARKETING AGENT / LIVE RUN</div>
-              <h2>사진을 살펴보고 있어요…</h2>
-              <p>한 번의 inference로 서로 다른 두 가지 카드 아이디어를 구성하고 있습니다.</p>
-              <div className="marketer-run-summary">
-                <div className="marketer-run-row">
-                  <span className="marketer-run-icon">✦</span>
-                  <div><span className="marketer-run-label">CURRENT REASONING</span><strong>{currentReasoning}</strong></div>
-                </div>
-                <div className="marketer-run-row">
-                  <span className="marketer-run-icon">⌁</span>
-                  <div><span className="marketer-run-label">MOST RECENT TOOL</span><strong>{recentTool}</strong></div>
-                </div>
-              </div>
-              <details className="marketer-event-details">
-                <summary>전체 reasoning · tool 로그 <span>{eventLog.length}</span></summary>
-                <div className="marketer-event-log">
-                  {(eventLog.length ? eventLog : [fallbackEvent]).map((entry) => (
-                    <div className={`marketer-event-row ${entry.kind}`} key={entry.id}>
-                      <span>{entry.kind === "tool" ? "TOOL" : entry.kind === "reasoning" ? "REASONING" : "STATUS"}</span>
-                      <p><strong>{entry.label}</strong>{entry.detail && <small>{entry.detail}</small>}</p>
-                    </div>
-                  ))}
-                </div>
-                {streamPreview && <div className="marketer-output-details"><div className="marketer-run-label">MODEL OUTPUT STREAM</div><pre>{streamText}</pre></div>}
-              </details>
+              <div className="idea-label">CONTENT DIRECTION</div>
+              <h2>콘텐츠 방향을 정리하고 있어요…</h2>
+              <p>업로드한 사진과 입력한 내용을 바탕으로 두 가지 방향을 준비하고 있습니다.</p>
             </div>
           </div>
         ) : (

@@ -9,17 +9,21 @@ import {
 
 const STORAGE_KEY = "nomorebmt:onboarding-profile:v1";
 
+function storageKey(userId?: string) {
+  return userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY;
+}
+
 export type OnboardingStorageResult = {
   profile: StoredOnboardingProfile;
   storage: "local" | "supabase";
   warning?: string;
 };
 
-function readLocalProfile(): StoredOnboardingProfile | null {
+function readLocalProfile(userId?: string): StoredOnboardingProfile | null {
   if (typeof window === "undefined") return null;
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey(userId));
     if (!raw) return null;
     const parsed = storedOnboardingProfileSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : null;
@@ -28,24 +32,27 @@ function readLocalProfile(): StoredOnboardingProfile | null {
   }
 }
 
-function writeLocalProfile(profile: StoredOnboardingProfile) {
+function writeLocalProfile(profile: StoredOnboardingProfile, userId?: string) {
   if (typeof window !== "undefined") {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+    window.localStorage.setItem(storageKey(userId), JSON.stringify(profile));
   }
 }
 
 export async function loadOnboardingProfile(): Promise<OnboardingStorageResult | null> {
-  const localProfile = readLocalProfile();
   const supabase = getSupabaseBrowserClient();
   if (!supabase) {
+    const localProfile = readLocalProfile();
     return localProfile ? { profile: localProfile, storage: "local" } : null;
   }
 
   try {
     const { data: authData } = await supabase.auth.getUser();
     if (!authData.user) {
+      const localProfile = readLocalProfile();
       return localProfile ? { profile: localProfile, storage: "local" } : null;
     }
+
+    const localProfile = readLocalProfile(authData.user.id);
 
     const { data, error } = await supabase
       .from("user_brand_contexts")
@@ -63,34 +70,36 @@ export async function loadOnboardingProfile(): Promise<OnboardingStorageResult |
       : null;
 
     if (remote?.success) {
-      writeLocalProfile(remote.data);
+      writeLocalProfile(remote.data, authData.user.id);
       return { profile: remote.data, storage: "supabase" };
     }
-  } catch (error) {
-    if (localProfile) {
-      return {
-        profile: localProfile,
-        storage: "local",
-        warning: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
 
-  return localProfile ? { profile: localProfile, storage: "local" } : null;
+    return localProfile ? { profile: localProfile, storage: "local" } : null;
+  } catch (error) {
+    return null;
+  }
 }
 
 export async function saveOnboardingProfile(
   profile: StoredOnboardingProfile,
 ): Promise<OnboardingStorageResult> {
   const validated = storedOnboardingProfileSchema.parse(profile);
-  writeLocalProfile(validated);
 
   const supabase = getSupabaseBrowserClient();
-  if (!supabase) return { profile: validated, storage: "local" };
+  if (!supabase) {
+    writeLocalProfile(validated);
+    return { profile: validated, storage: "local" };
+  }
+
+  let authenticatedUserId: string | null = null;
 
   try {
     const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user) return { profile: validated, storage: "local" };
+    if (!authData.user) {
+      writeLocalProfile(validated);
+      return { profile: validated, storage: "local" };
+    }
+    authenticatedUserId = authData.user.id;
 
     const { error } = await supabase.from("user_brand_contexts").upsert(
       {
@@ -105,8 +114,12 @@ export async function saveOnboardingProfile(
     );
 
     if (error) throw error;
+    writeLocalProfile(validated, authData.user.id);
     return { profile: validated, storage: "supabase" };
   } catch (error) {
+    if (authenticatedUserId) {
+      throw error;
+    }
     return {
       profile: validated,
       storage: "local",
