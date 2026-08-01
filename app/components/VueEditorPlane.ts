@@ -248,6 +248,11 @@ const VueEditorPlane = defineComponent({
     if (cardCount === 0) {
       throw new Error("선택한 아이디어에 슬라이드 계획이 없습니다.");
     }
+    if (cardCount !== props.assetItems.length + 1) {
+      throw new Error(
+        `슬라이드는 표지 1장과 사진별 본문으로 구성되어야 해요. 현재 사진 ${props.assetItems.length}장, 슬라이드 ${cardCount}장이에요.`,
+      );
+    }
     const cardColumns = Math.min(3, cardCount);
     const cardGap = 120;
     const cardSlots = Array.from({ length: cardCount }, (_, index) => ({
@@ -346,6 +351,25 @@ const VueEditorPlane = defineComponent({
       return node.childIds.some((childId) => nodeContainsImage(childId, visited));
     }
 
+    function collectImageFillHashes(
+      nodeId: string,
+      visited = new Set<string>(),
+    ): string[] {
+      if (visited.has(nodeId)) return [];
+      visited.add(nodeId);
+      const node = editor.graph.getNode(nodeId);
+      if (!node) return [];
+      const ownHashes = node.fills
+        .filter((paint) => paint.type === "IMAGE" && paint.visible !== false)
+        .map((paint) => paint.imageHash || "__IMAGE_WITHOUT_HASH__");
+      return [
+        ...ownHashes,
+        ...node.childIds.flatMap((childId) =>
+          collectImageFillHashes(childId, visited),
+        ),
+      ];
+    }
+
     function nodeContainsLiteralNewline(nodeId: string, visited = new Set<string>()): boolean {
       if (visited.has(nodeId)) return false;
       visited.add(nodeId);
@@ -377,9 +401,22 @@ const VueEditorPlane = defineComponent({
         }
         if (node.childIds.length === 0) errors.push(`Card ${index + 1}: contains no visual children.`);
 
-        const hasImage = nodeContainsImage(nodeId);
-        if (props.assetItems.length > 0 && !hasImage) {
-          errors.push(`Card ${index + 1}: no visible user image fill was found.`);
+        const imageHashes = collectImageFillHashes(nodeId);
+        const hasImage = imageHashes.length > 0;
+        if (imageHashes.length !== 1) {
+          errors.push(`Card ${index + 1}: expected exactly one visible user image fill, found ${imageHashes.length}.`);
+        }
+        const expectedAssetIndex = index === 0 ? 0 : index - 1;
+        const expectedAssetNodeId = assetNodeIds[expectedAssetIndex];
+        const expectedImageHash = expectedAssetNodeId
+          ? collectImageFillHashes(expectedAssetNodeId)[0]
+          : undefined;
+        if (
+          expectedImageHash &&
+          imageHashes.length === 1 &&
+          imageHashes[0] !== expectedImageHash
+        ) {
+          errors.push(`Card ${index + 1}: image does not match upload ${expectedAssetIndex + 1}.`);
         }
         if (nodeContainsLiteralNewline(nodeId)) {
           errors.push(`Card ${index + 1}: contains a literal \\n sequence in text.`);
@@ -394,6 +431,8 @@ const VueEditorPlane = defineComponent({
           height: node.height,
           childCount: node.childIds.length,
           hasImage,
+          imageCount: imageHashes.length,
+          expectedAssetId: props.assetItems[expectedAssetIndex]?.assetId,
         };
       });
 

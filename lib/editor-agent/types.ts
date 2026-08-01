@@ -72,6 +72,32 @@ export const editorAgentInputSchema = z.object({
   /** Stable brand profile generated from the user's onboarding answers. */
   brandContext: z.unknown().optional(),
   marketerContext: z.unknown().optional(),
+}).superRefine((value, context) => {
+  const requiredSlideCount = value.assets.items.length + 1;
+  if (value.editorInput.slides.length !== requiredSlideCount) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["editorInput", "slides"],
+      message: `Expected one cover plus one slide per asset (${requiredSlideCount} total).`,
+    });
+  }
+  if (
+    value.task.cardCount !== undefined &&
+    value.task.cardCount !== requiredSlideCount
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["task", "cardCount"],
+      message: `cardCount must be ${requiredSlideCount}.`,
+    });
+  }
+  if (value.openPencil.assetNodeIds.length !== value.assets.items.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["openPencil", "assetNodeIds"],
+      message: "Every user asset must have one ordered source node.",
+    });
+  }
 });
 
 export const editorAgentResultSchema = z.object({

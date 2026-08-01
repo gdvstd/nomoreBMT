@@ -32,7 +32,7 @@ export const marketerAgentInputSchema = z.object({
   target: z.string().default("instagram_carousel"),
   assets: z.object({
     assetSetId: z.string(),
-    items: z.array(marketerAssetSchema).min(1),
+    items: z.array(marketerAssetSchema).min(1).max(9),
   }),
   references: z
     .object({
@@ -51,7 +51,7 @@ export const marketerIdeaCardSchema = z.object({
   assets: z.array(z.string()).min(1),
   assetIds: z.array(z.string()).default([]),
   referenceAssetIds: z.array(z.string()).max(2).default([]),
-  slides: z.array(z.string()).min(3).max(12),
+  slides: z.array(z.string()).min(2).max(10),
   accent: z.enum(["coral", "blue"]),
 });
 

@@ -13,6 +13,11 @@ export type UserAssetUpload = {
   description?: string;
 };
 
+export type RenderedSlideUpload = {
+  index: number;
+  imageDataUrl: string;
+};
+
 function safeFilename(value: string) {
   const normalized = value
     .normalize("NFKD")
@@ -86,4 +91,46 @@ export async function uploadUserProjectAssets(
   }
 
   return uploaded;
+}
+
+export async function uploadRenderedProjectAssets(
+  projectId: string,
+  slides: RenderedSlideUpload[],
+): Promise<string[]> {
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) throw new Error("Supabase가 설정되지 않았어요.");
+
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user) {
+    throw new Error("완성된 게시물을 저장하려면 로그인이 필요해요.");
+  }
+
+  const storagePaths: string[] = [];
+  for (const slide of slides) {
+    const response = await fetch(slide.imageDataUrl);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) {
+      throw new Error(`${slide.index + 1}번째 결과가 이미지 형식이 아니에요.`);
+    }
+
+    const extension = blob.type === "image/jpeg" ? "jpg" : "png";
+    const storagePath = [
+      authData.user.id,
+      projectId,
+      "generated",
+      `slide-${String(slide.index + 1).padStart(2, "0")}.${extension}`,
+    ].join("/");
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(storagePath, blob, {
+        contentType: blob.type,
+        upsert: true,
+      });
+    if (uploadError) throw uploadError;
+    storagePaths.push(storagePath);
+  }
+
+  return storagePaths;
 }

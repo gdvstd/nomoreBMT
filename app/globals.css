@@ -412,7 +412,7 @@ button { cursor: pointer; }
 .profile-identity { color: var(--coral); font-weight: 700; }
 .story-upload-zone, .story-upload-zone .upload-icon { cursor: pointer; }
 .story-upload-zone > span { font-size: 0; }
-.story-upload-zone > span::after { content: "JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 20장"; font-size: 9px; }
+.story-upload-zone > span::after { content: "JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 9장"; font-size: 9px; }
 .dashboard-actions .secondary-link { display: none; }
 .page-heading .content-kicker { display: none; }
 .section-label { display: none; }
@@ -430,3 +430,68 @@ button { cursor: pointer; }
 @media (max-width: 900px) { .auth-shell { padding: 40px 34px; }.auth-grid { gap: 35px; } }
 @media (max-width: 680px) { .auth-shell { padding: 42px 20px; }.auth-grid { grid-template-columns: 1fr; gap: 43px; }.auth-intro .auth-brand { margin-bottom: 22px; }.auth-intro h1 { font-size: 46px; }.auth-card { padding: 28px 24px 26px; border-radius: 22px; } }
 @media (max-width: 680px) { .dashboard-heading-actions { width: 100%; height: auto; align-items: stretch; margin-top: 0; gap: 14px; }.account-actions { justify-content: flex-end; }.dashboard-actions { justify-content: space-between; } }
+
+/* Review publishing ------------------------------------------------------ */
+.caption-box textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #777169;
+  font: 11px/1.6 'Pretendard';
+}
+.caption-box small {
+  display: block;
+  margin-top: 8px;
+  color: #9e968d;
+  font: 9px 'DM Mono';
+  text-align: right;
+}
+.review-publish-target {
+  margin-top: 18px;
+  color: #8f877f;
+  font-size: 11px;
+}
+.review-publish-target strong { color: var(--ink); }
+.review-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+.review-action-grid button { justify-content: center; }
+.instagram-publish-button {
+  background: #111;
+  color: #fff;
+}
+.instagram-publish-button:hover:not(:disabled) { background: #2b2b2b; }
+.publish-message {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.publish-message.error {
+  color: #a83b32;
+  background: #fff1ef;
+}
+.publish-message.success {
+  color: #26734d;
+  background: #effaf3;
+}
+.publish-message a {
+  color: inherit;
+  font-weight: 700;
+}
+.review-secondary-actions {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.review-secondary-actions .regenerate-button { margin: 0; }
+@media (max-width: 680px) {
+  .review-action-grid { grid-template-columns: 1fr; }
+}

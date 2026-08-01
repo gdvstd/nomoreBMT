@@ -23,6 +23,7 @@ import {
   type EditorInput,
 } from "@/lib/editor-input/types";
 import {
+  uploadRenderedProjectAssets,
   uploadUserProjectAssets,
 } from "@/lib/project-assets/browser";
 import type { ProjectAsset } from "@/lib/project-assets/types";
@@ -50,6 +51,7 @@ type ReferenceAssetCandidate = {
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_USER_PHOTOS = 9;
 
 
 type AgentLogEntry = {
@@ -233,16 +235,20 @@ export default function Home() {
     });
     const oversized = incoming.filter((file) => file.size > MAX_IMAGE_SIZE);
     const valid = incoming.filter((file) => !invalidFormat.includes(file) && !oversized.includes(file));
+    const remainingSlots = Math.max(0, MAX_USER_PHOTOS - files.length);
+    const accepted = valid.slice(0, remainingSlots);
 
     if (invalidFormat.length > 0) {
       setFileError("JPG, JPEG, PNG, WEBP 형식의 이미지만 올릴 수 있어요.");
     } else if (oversized.length > 0) {
       setFileError("이미지 한 장의 크기는 10MB 이하여야 해요.");
+    } else if (valid.length > remainingSlots) {
+      setFileError(`사진은 최대 ${MAX_USER_PHOTOS}장까지 올릴 수 있어요. 표지를 포함해 최대 10장으로 제작됩니다.`);
     } else {
       setFileError("");
     }
 
-    const selected = await Promise.all(valid.map(async (file) => ({
+    const selected = await Promise.all(accepted.map(async (file) => ({
       id: crypto.randomUUID(),
       name: file.name,
       previewUrl: URL.createObjectURL(file),
@@ -252,8 +258,8 @@ export default function Home() {
     })));
     setFiles((previous) => {
       const combined = [...previous, ...selected];
-      combined.slice(20).forEach((file) => URL.revokeObjectURL(file.previewUrl));
-      return combined.slice(0, 20);
+      combined.slice(MAX_USER_PHOTOS).forEach((file) => URL.revokeObjectURL(file.previewUrl));
+      return combined.slice(0, MAX_USER_PHOTOS);
     });
     event.target.value = "";
   }
@@ -643,7 +649,7 @@ export default function Home() {
         )}
 
         {screen === "review" && renderedPost && brandContext && (
-          <Review post={renderedPost} instagramHandle={brandContext.instagramHandle} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("editor")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
+          <Review projectId={activeProjectId} post={renderedPost} instagramHandle={brandContext.instagramHandle} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("editor")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
         )}
       </section>
     </main>
@@ -775,7 +781,7 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReo
     setActiveAssetId(remaining[nextIndex]?.id ?? null);
   }
 
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 필요한 사진에만 추가 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES · DESCRIPTION OPTIONAL` : "UP TO 20 FILES"}</span></div><h2>2. 필요한 사진에만 이야기를 더해주세요.</h2><p>사진 설명은 선택사항입니다. 장소, 날짜, 메뉴처럼 사진만으로 알 수 없는 정보가 있을 때만 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 20장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요 <small>(선택)</small></strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="선택사항 · 예: 여행 2일차에 방문한 식당, 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 필요한 사진에만 추가 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES · ${files.length + 1} SLIDES` : "UP TO 9 FILES"}</span></div><h2>2. 필요한 사진에만 이야기를 더해주세요.</h2><p>표지 1장과 사진별 슬라이드를 만듭니다. 사진 설명은 선택사항이며 업로드 순서가 슬라이드 순서가 됩니다.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 9장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요 <small>(선택)</small></strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="선택사항 · 예: 여행 2일차에 방문한 식당, 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
 function Ideas({ ideas, loading, error, ready, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; ready: boolean; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
@@ -821,9 +827,47 @@ function Ideas({ ideas, loading, error, ready, selectedIdea, onSelect, onBack, o
   );
 }
 
-function Review({ post, instagramHandle, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; instagramHandle: string; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
+function Review({ projectId, post, instagramHandle, activeSlide, setActiveSlide, onBack, onRestart }: { projectId: string; post: RenderedPost; instagramHandle: string; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
   const slide = post.slides[activeSlide];
   const previewImageUrl = slide.imageDataUrl ?? post.previewImageUrl;
+  const [caption, setCaption] = useState(post.caption);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+  const [publishedUrl, setPublishedUrl] = useState("");
+  const [connectedAccount, setConnectedAccount] = useState(instagramHandle);
+  const [accountStatus, setAccountStatus] = useState<"checking" | "ready" | "error">("checking");
+  const [accountError, setAccountError] = useState("");
+  const contentReady = post.slides.length >= 2 && post.slides.length <= 10
+    && post.slides.every((item) => Boolean(item.imageDataUrl));
+  const canPublish = contentReady && accountStatus === "ready";
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/instagram/publish")
+      .then(async (response) => {
+        const payload = await response.json() as {
+          profile?: { username?: string };
+          error?: string;
+        };
+        if (active && response.ok && payload.profile?.username) {
+          setConnectedAccount(payload.profile.username);
+          setAccountStatus("ready");
+          return;
+        }
+        if (active) {
+          setAccountStatus("error");
+          setAccountError(payload.error ?? "연결된 Instagram 계정을 확인하지 못했어요.");
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setAccountStatus("error");
+        setAccountError("연결된 Instagram 계정을 확인하지 못했어요.");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function downloadSlides() {
     post.slides.forEach((item, index) => {
@@ -835,5 +879,50 @@ function Review({ post, instagramHandle, activeSlide, setActiveSlide, onBack, on
     });
   }
 
-  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${previewImageUrl ? "agent-rendered" : ""}`}>{previewImageUrl ? <img className="agent-rendered-image" src={previewImageUrl} alt={`${activeSlide + 1}번째 편집자 에이전트 결과`} /> : <><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>@{instagramHandle}</span><span>✦</span></div></>}</div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.nodeId ?? item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={downloadSlides}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
+  async function publishToInstagram() {
+    if (!canPublish || publishing || publishedUrl) return;
+    const confirmed = window.confirm(
+      `연결된 Instagram @${connectedAccount} 계정에 지금 게시할까요?\n게시 후에는 앱에서 자동으로 취소할 수 없어요.`,
+    );
+    if (!confirmed) return;
+
+    setPublishing(true);
+    setPublishError("");
+    try {
+      const storagePaths = await uploadRenderedProjectAssets(
+        projectId,
+        post.slides.map((item, index) => {
+          if (!item.imageDataUrl) {
+            throw new Error(`${index + 1}번째 슬라이드 이미지가 없어요.`);
+          }
+          return { index, imageDataUrl: item.imageDataUrl };
+        }),
+      );
+      const response = await fetch("/api/instagram/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, caption, storagePaths }),
+      });
+      const payload = await response.json() as {
+        permalink?: string | null;
+        mediaId?: string;
+        error?: string;
+      };
+      if (!response.ok || !payload.mediaId) {
+        throw new Error(payload.error ?? "Instagram 게시에 실패했어요.");
+      }
+      setPublishedUrl(
+        payload.permalink
+          ?? `https://www.instagram.com/${connectedAccount}/`,
+      );
+    } catch (error) {
+      setPublishError(
+        error instanceof Error ? error.message : "Instagram 게시에 실패했어요.",
+      );
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">다운로드하거나 연결된 Instagram 계정에 바로 게시할 수 있어요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${previewImageUrl ? "agent-rendered" : ""}`}>{previewImageUrl ? <img className="agent-rendered-image" src={previewImageUrl} alt={`${activeSlide + 1}번째 편집자 에이전트 결과`} /> : <><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>@{instagramHandle}</span><span>✦</span></div></>}</div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.nodeId ?? item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><textarea aria-label="Instagram 게시물 캡션" value={caption} maxLength={2200} onChange={(event) => setCaption(event.target.value)} /><small>{caption.length} / 2,200</small></div>{!contentReady && <div className="publish-message error">Instagram 캐러셀은 완성된 이미지 2~10장이 필요해요. 현재 결과는 다운로드만 가능해요.</div>}{accountStatus === "error" && <div className="publish-message error">{accountError}</div>}{publishError && <div className="publish-message error" role="alert">{publishError}</div>}{publishedUrl && <div className="publish-message success">게시가 완료됐어요. <a href={publishedUrl} target="_blank" rel="noreferrer">Instagram에서 보기 ↗</a></div>}<div className="review-publish-target">게시 대상 <strong>{accountStatus === "checking" ? "계정 확인 중…" : `@${connectedAccount}`}</strong></div><div className="review-action-grid"><button className="secondary-button" onClick={downloadSlides}>게시물 다운로드 <span>↓</span></button><button className="primary-button instagram-publish-button" disabled={!canPublish || publishing || Boolean(publishedUrl)} onClick={publishToInstagram}>{publishedUrl ? "게시 완료 ✓" : publishing ? "Instagram 게시 중…" : "Instagram에 게시"} <span>↗</span></button></div><div className="button-row review-secondary-actions"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div></div>;
 }

@@ -33,7 +33,7 @@ export const generateEditorInputRequestSchema = z.object({
   language: z.string().default("ko"),
   selectedIdea: marketerIdeaCardSchema,
   brandContext: z.unknown().optional(),
-  userAssets: z.array(projectAssetSchema).min(1),
+  userAssets: z.array(projectAssetSchema).min(1).max(9),
   referenceAssets: z.array(projectAssetSchema).max(2).default([]),
 });
 

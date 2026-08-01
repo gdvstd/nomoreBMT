@@ -26,9 +26,12 @@ Rules:
   supplied order, with at most two values.
 - Reference images are evidence for design only. Never assign them to a
   slide.imageUrl and never instruct the Editor to place them in the result.
-- slides.length must exactly match the selected idea's slide-plan length and is
-  the final carousel slide count.
-- Every non-null slide.imageUrl must exactly match one supplied user-photo URL.
+- slides.length must equal supplied user-photo count + 1.
+- Slide 1 is the cover and uses the first supplied user photo as its only
+  image.
+- Starting at slide 2, slide N+1 must use user photo N in supplied order.
+- Every slide has exactly one non-null imageUrl. Never skip, reorder, combine,
+  or substitute user photos.
 - text is null only for an intentionally text-free slide. Otherwise specify
   every visible text element with content, point size, color, and optional font.
 - description naturally explains text positions, composition, style, image
@@ -62,8 +65,8 @@ function buildInput(request: GenerateEditorInputRequest): AgentInputItem[] {
         request.request,
         "\nSELECTED IDEA\n",
         safeJson(request.selectedIdea),
-        `\nREQUIRED SLIDE COUNT\n${request.selectedIdea.slides.length}`,
-        "\nCreate exactly one output slide for each selected-idea slide-plan item, in the same order.",
+        `\nREQUIRED SLIDE COUNT\n${request.userAssets.length + 1}`,
+        "\nCreate one cover using user photo 1, then one body slide per user photo. Body slide N+1 must use only user photo N in manifest order.",
         request.brandContext
           ? `\nBRAND CONTEXT\n${safeJson(request.brandContext)}`
           : "",
@@ -107,34 +110,21 @@ function verifyAssetUrls(
   output: EditorInput,
   request: GenerateEditorInputRequest,
 ) {
-  if (output.slides.length !== request.selectedIdea.slides.length) {
+  const requiredSlideCount = request.userAssets.length + 1;
+  if (output.slides.length !== requiredSlideCount) {
     throw new Error(
-      `EditorInput slide 수(${output.slides.length})가 선택 아이디어의 slide 수(${request.selectedIdea.slides.length})와 달라요.`,
+      `EditorInput slide 수(${output.slides.length})가 필수 slide 수(${requiredSlideCount})와 달라요.`,
     );
   }
-  const plannedAssets = [
-    ...request.selectedIdea.assetIds
-      .map((assetId) =>
-        request.userAssets.find((asset) => asset.assetId === assetId),
-      )
-      .filter((asset): asset is (typeof request.userAssets)[number] =>
-        Boolean(asset),
-      ),
-    ...request.userAssets.filter(
-      (asset) => !request.selectedIdea.assetIds.includes(asset.assetId),
-    ),
-  ];
   const normalizedSlides = output.slides.map((slide, index) => {
-    if (slide.imageUrl === null) return slide;
-    const exactAsset = request.userAssets.find(
-      (asset) => asset.signedUrl === slide.imageUrl,
-    );
-    const fallbackAsset =
-      plannedAssets[index % plannedAssets.length] ??
-      request.userAssets[index % request.userAssets.length];
+    const requiredAsset =
+      index === 0 ? request.userAssets[0] : request.userAssets[index - 1];
     return {
       ...slide,
-      imageUrl: exactAsset?.signedUrl ?? fallbackAsset?.signedUrl ?? null,
+      imageUrl: requiredAsset.signedUrl,
+      description: index === 0
+        ? `${slide.description} 표지는 첫 번째 업로드 사진 한 장만 사용한다.`
+        : `${slide.description} 업로드 ${index}번째 사진 한 장만 사용하며 다른 사진을 함께 배치하지 않는다.`,
     };
   });
   const referenceImageUrls = request.referenceAssets.map(
@@ -161,7 +151,7 @@ export async function generateEditorInput(
   });
   const exactOutputSchema = editorInputSchema.extend({
     slides: plannerSlideSchema.array().length(
-      request.selectedIdea.slides.length,
+      request.userAssets.length + 1,
     ),
   });
   const agent = new Agent({

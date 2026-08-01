@@ -62,6 +62,11 @@ that was not applied to the document.
    set_image_fill. Only call set_image_fill when actual base64 image_data is
    available. Never finish with only
    seeded placeholder rectangles.
+   The image mapping is fixed: card 1 is the cover and uses assetNodeIds[0];
+   card 2 also uses assetNodeIds[0]; card 3 uses assetNodeIds[1], continuing
+   in upload order. Every card must contain exactly one visible user-image
+   fill. Never make a collage, add a second user image, skip an asset, or
+   change this order.
 6. Compose the cards using OpenPencil tools: create or update frames, place and
    crop assets, set fills/strokes/layout, and set text. Keep each card as a
    separately addressable root node.
@@ -85,6 +90,9 @@ that was not applied to the document.
 Design constraints:
 - Treat the supplied EditorInput as the authoritative slide count, visible
   text, shared design direction, per-slide composition, and user-image mapping.
+- The final slide count must be assets.items.length + 1. The first card is a
+  cover based on the first user photo; every later card maps one-to-one to the
+  user photos in manifest order and contains exactly one user image.
 - Design-reference images are visual evidence only. Never place them in the
   finished composition; only user-photo URLs may become slide imagery.
 - Follow the provided design principles and idea card before adding stylistic

@@ -51,6 +51,16 @@ The creation flow is:
 5. Call `POST /api/projects/[id]/editor/input` once to create the selected
    idea's slide-level `EditorInput`.
 6. Send `EditorInput`, user photos, and design references to Editor Agent.
+7. On review, optionally upload the final PNG slides under the authenticated
+   user's `generated/` Storage prefix.
+8. Call `POST /api/instagram/publish` to create each Instagram child media
+   container, create the carousel container, wait for processing, and publish.
+
+Carousel length and photo mapping are deterministic. The app accepts at most
+nine user photos, creates one cover from the first photo, then creates exactly
+one body slide per photo in upload order. For example, five photos produce six
+slides. Every slide contains exactly one visible user image; the Editor
+validation rejects missing, reordered, or multi-image cards.
 
 Reference images are multimodal design evidence only and must never be placed
 in the finished carousel. Database rows retain storage paths; Agent runs use
@@ -88,6 +98,19 @@ discovery. Keep its real value only in `.env.local` and never prefix it with
 the numeric account ID from the access token. App ID and App Secret are reserved
 for the OAuth connection flow.
 
+Automatic publishing uses the Instagram API with Instagram Login. The token
+must belong to a Professional (Business or Creator) account and include
+`instagram_business_basic` and `instagram_business_content_publish`. Meta must
+be able to fetch every media file from a public URL, so the server creates
+one-hour Supabase signed URLs for the private generated images. The UI requires
+2–10 fully exported images and asks for confirmation before publishing.
+
+Check the connected publishing account:
+
+```bash
+curl http://localhost:3000/api/instagram/publish
+```
+
 Run an analysis through the UI or call the API directly:
 
 ```bash
@@ -96,8 +119,10 @@ curl -X POST http://localhost:3000/api/instagram/analyze \
   -d '{"postLimit":12,"commentsPerPost":20,"focus":""}'
 ```
 
-The current endpoint is intended for local MVP use. Add application
-authentication and per-user token storage before exposing it publicly.
+The current Instagram token is server-wide and intended for the connected MVP
+account. Supabase authentication protects the route, but a multi-user product
+must add Instagram OAuth and encrypted per-user token storage before exposing
+account selection publicly.
 
 ## Marketer skills
 

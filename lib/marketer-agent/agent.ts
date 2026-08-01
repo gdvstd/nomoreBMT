@@ -25,13 +25,22 @@ Return exactly two cards. Every card must include:
 - a short label and title;
 - a clear hook that explains why someone would stop or save it;
 - a concise description of the narrative and visual treatment;
-- the carousel format and a 3–12 slide plan;
+- the carousel format and exactly one cover slide plus one body slide per
+  supplied user photo;
 - human-readable asset labels plus the exact asset IDs used.
 - up to two exact reference asset IDs when reference images are supplied.
 
 Reference images are design evidence only. Use them to derive reusable layout,
 hierarchy, color, typography, spacing, and image-treatment principles. Never
 plan to place a reference image in the finished post.
+
+Slide structure is fixed and must not be changed:
+- slides.length equals supplied user photo count + 1;
+- slide 1 is a cover built from the first supplied user photo;
+- slide 2 uses only user photo 1;
+- slide 3 uses only user photo 2, continuing in upload order;
+- every body slide uses exactly one photo and no photo may be skipped,
+  reordered, or combined with another photo.
 
 Do not claim facts that are not present in the brief or visible in the assets.
 Keep copy in the requested language and preserve the user's brand direction.
@@ -66,6 +75,7 @@ function buildTextPrompt(input: MarketerAgentInput) {
     "\nASSET MANIFEST (the images follow this text)\n",
     safeJson({ assetSetId: input.assets.assetSetId, items: manifest }),
     "\nUse the assetId values exactly when assigning assets to each idea.\n",
+    `\nFIXED CAROUSEL STRUCTURE\nCreate exactly ${input.assets.items.length + 1} slides: one cover using the first photo, followed by exactly one body slide per user photo in manifest order. Body slide N+1 must use only photo N. Keep assetIds in manifest order.\n`,
     referenceManifest?.length
       ? `\nDESIGN REFERENCE MANIFEST (images follow; choose at most two IDs per idea)\n${safeJson(referenceManifest)}`
       : "",
@@ -103,6 +113,37 @@ export function buildMarketerAgentInput(input: MarketerAgentInput): AgentInputIt
   }
 
   return [user(content as Parameters<typeof user>[0])];
+}
+
+function normalizeFixedSlideStructure(
+  output: MarketerAgentOutput,
+  input: MarketerAgentInput,
+): MarketerAgentOutput {
+  const orderedAssets = input.assets.items;
+  const orderedAssetIds = orderedAssets.map((asset) => asset.assetId);
+  const assetLabels = orderedAssets.map(
+    (asset, index) => asset.name || `사진 ${index + 1}`,
+  );
+  const firstAsset = orderedAssets[0];
+
+  return {
+    ideas: output.ideas.map((idea) => ({
+      ...idea,
+      assets: assetLabels,
+      assetIds: orderedAssetIds,
+      slides: [
+        `표지 — "${idea.title}". 첫 번째 업로드 사진(assetId=${firstAsset.assetId}) 한 장을 기반으로 ${idea.hook}`,
+        ...orderedAssets.map((asset, index) => {
+          const modelPlan =
+            idea.slides[index + 1] ??
+            idea.slides[index] ??
+            asset.description ??
+            `${index + 1}번째 사진의 핵심 내용을 전달`;
+          return `${index + 2}장 — 업로드 ${index + 1}번째 사진(assetId=${asset.assetId}) 한 장만 사용. ${modelPlan}`;
+        }),
+      ],
+    })),
+  };
 }
 
 export function createMarketerAgent(options?: { model?: string }) {
@@ -182,7 +223,8 @@ export async function runMarketerAgent(
     { traceId, groupId, metadata: traceMetadata },
   );
   if (!result.finalOutput) throw new Error("Marketing agent completed without structured output");
-  options.onEvent?.({ type: "result", ideas: result.finalOutput.ideas });
+  const normalizedOutput = normalizeFixedSlideStructure(result.finalOutput, input);
+  options.onEvent?.({ type: "result", ideas: normalizedOutput.ideas });
   options.onEvent?.({
     type: "status",
     status: "completed",
@@ -190,5 +232,5 @@ export async function runMarketerAgent(
     runId,
     traceId,
   });
-  return result.finalOutput;
+  return normalizedOutput;
 }
