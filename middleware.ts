@@ -21,7 +21,14 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // Analysis is an authenticated workspace page. Keep logged-out visitors
+  // on the landing/login screen even when an old browser history entry exists.
+  if (request.nextUrl.pathname.startsWith("/analysis") && !user) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
   return response;
 }
 

@@ -31,7 +31,7 @@ type UploadedAsset = {
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
 
 type AgentLogEntry = {
@@ -67,7 +67,11 @@ export default function Home() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [screen, setScreen] = useState<Screen>("onboarding");
+  const [screen, setScreen] = useState<Screen>(() => {
+    if (typeof window === "undefined") return "onboarding";
+    const saved = window.sessionStorage.getItem("nomorebmt-screen");
+    return steps.some((step) => step.id === saved) ? saved as Screen : "onboarding";
+  });
   const [onboardingAnswers, setOnboardingAnswers] = useState<OnboardingAnswers>({ ...EMPTY_ONBOARDING_ANSWERS });
   const [brandContext, setBrandContext] = useState<BrandContext | null>(null);
   const [storageMode, setStorageMode] = useState<OnboardingStorageResult["storage"] | null>(null);
@@ -129,6 +133,10 @@ export default function Home() {
     marketerStream.current?.close();
   }, []);
 
+  useEffect(() => {
+    window.sessionStorage.setItem("nomorebmt-screen", screen);
+  }, [screen]);
+
   const brandText = useMemo(() => brandContextToAgentText(brandContext), [brandContext]);
   const currentStep = steps.findIndex((step) => step.id === screen);
   const profileSummary = useMemo(() => {
@@ -142,8 +150,12 @@ export default function Home() {
     if (authLoading || !authUser) return;
 
     let active = true;
+    const savedScreen = window.sessionStorage.getItem("nomorebmt-screen");
+    const rememberedScreen = savedScreen && steps.some((step) => step.id === savedScreen)
+      ? savedScreen as Screen
+      : "onboarding";
 
-    setScreen("onboarding");
+    setScreen(rememberedScreen);
     setOnboardingAnswers({ ...EMPTY_ONBOARDING_ANSWERS });
     setBrandContext(null);
     setStorageMode(null);
@@ -153,13 +165,13 @@ export default function Home() {
       setOnboardingAnswers(saved.profile.answers);
       setBrandContext(saved.profile.context);
       setStorageMode(saved.storage);
-      setScreen("dashboard");
+      setScreen(rememberedScreen === "onboarding" ? "dashboard" : rememberedScreen);
     });
 
     return () => {
       active = false;
     };
-  }, [authLoading, authUser]);
+  }, [authLoading, authUser?.id]);
 
   async function completeOnboarding(answers: OnboardingAnswers) {
     const normalizedAnswers = {
@@ -201,7 +213,7 @@ export default function Home() {
     if (invalidFormat.length > 0) {
       setFileError("JPG, JPEG, PNG, WEBP 형식의 이미지만 올릴 수 있어요.");
     } else if (oversized.length > 0) {
-      setFileError("이미지 한 장의 크기는 20MB 이하여야 해요.");
+      setFileError("이미지 한 장의 크기는 10MB 이하여야 해요.");
     } else {
       setFileError("");
     }
@@ -215,8 +227,8 @@ export default function Home() {
     })));
     setFiles((previous) => {
       const combined = [...previous, ...selected];
-      combined.slice(30).forEach((file) => URL.revokeObjectURL(file.previewUrl));
-      return combined.slice(0, 30);
+      combined.slice(20).forEach((file) => URL.revokeObjectURL(file.previewUrl));
+      return combined.slice(0, 20);
     });
     event.target.value = "";
   }
@@ -418,37 +430,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand-mark"><span>NOMORE</span><b>BMT</b></div>
-
-        <div className="sidebar-block">
-          <div className="eyebrow">YOUR WORKSPACE</div>
-          <div className="workspace-card">
-            <div className="workspace-avatar">{brandContext?.accountName.slice(0, 1).toUpperCase() || "B"}</div>
-            <div><strong>{brandContext?.accountName || "New account"}</strong><span>{brandContext ? `@${brandContext.instagramHandle}` : "Personal brand"}</span></div>
-            <span className="chevron">⌄</span>
-          </div>
-        </div>
-
-        <nav className="step-nav" aria-label="제작 단계">
-          {steps.map((step, index) => {
-            const isCurrent = step.id === screen;
-            const isDone = index < currentStep;
-            return (
-              <button className={`step-item ${isCurrent ? "current" : ""} ${isDone ? "done" : ""}`} key={step.id} onClick={() => index <= currentStep && setScreen(step.id)}>
-                <span className="step-number">{isDone ? "✓" : step.number}</span>
-                <span>{step.label}</span>
-                {isCurrent && <span className="step-dot" />}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="sidebar-bottom">
-          <div className="mini-label">BRAND NOTE</div>
-          <p>{profileSummary}</p>
-          <button className="quiet-button" onClick={() => setScreen("onboarding")}>브랜드 프로필 수정 <span>↗</span></button>
-          <button className="quiet-button auth-logout" onClick={() => void supabase?.auth.signOut()}>로그아웃 <span>↗</span></button>
-        </div>
+        <button className="brand-mark" type="button" onClick={() => brandContext && setScreen("dashboard")} aria-label="대시보드로 이동"><span>NOMORE</span><b>BMT</b></button>
       </aside>
 
       <section className="main-panel">
@@ -457,7 +439,7 @@ export default function Home() {
         )}
 
         {screen === "dashboard" && brandContext && (
-          <Dashboard context={brandContext} storageMode={storageMode} onNewProject={() => setScreen("brief")} />
+          <Dashboard context={brandContext} storageMode={storageMode} onNewProject={() => setScreen("brief")} onEditProfile={() => setScreen("onboarding")} onSignOut={() => void supabase?.auth.signOut()} />
         )}
 
         {screen === "brief" && (
@@ -526,9 +508,9 @@ function Onboarding({
 
   return <div className="content onboarding-screen">
     <div className="onboarding-grid onboarding-form-only">
+      <div className="onboarding-form-intro"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div>
       <form className="form-card onboarding-form" onSubmit={submit}>
         <div className="form-card-top"><span className="card-index">01 — 05</span></div>
-        <div className="onboarding-form-intro"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div>
         <div className="identity-fields">
           <label className={`qa-field ${showRequired && !answers.accountName.trim() ? "missing" : ""}`} htmlFor="accountName"><span>계정 이름 <b>*</b></span><input id="accountName" aria-invalid={showRequired && !answers.accountName.trim()} value={answers.accountName} onChange={(event) => updateAnswer("accountName", event.target.value)} placeholder="예: 소도시 식탁" maxLength={80} /><small className={showRequired && !answers.accountName.trim() ? "visible" : ""}>필수 항목이에요</small></label>
           <label className={`qa-field ${showRequired && !answers.instagramHandle.trim() ? "missing" : ""}`} htmlFor="instagramHandle"><span>Instagram ID <b>*</b></span><div className="handle-input"><b>@</b><input id="instagramHandle" aria-invalid={showRequired && !answers.instagramHandle.trim()} value={answers.instagramHandle} onChange={(event) => updateAnswer("instagramHandle", event.target.value)} placeholder="smallcity.table" maxLength={64} autoCapitalize="none" /></div><small className={showRequired && !answers.instagramHandle.trim() ? "visible" : ""}>필수 항목이에요</small></label>
@@ -547,17 +529,21 @@ function Dashboard({
   context,
   storageMode,
   onNewProject,
+  onEditProfile,
+  onSignOut,
 }: {
   context: BrandContext;
   storageMode: OnboardingStorageResult["storage"] | null;
   onNewProject: () => void;
+  onEditProfile: () => void;
+  onSignOut: () => void;
 }) {
-  return <div className="content"><div className="page-heading"><div><div className="content-kicker">WORKSPACE / OVERVIEW</div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION <span>{storageMode === "supabase" ? "DB SYNCED" : "LOCAL SAVED"}</span></div><div className="profile-account">{context.accountName} · @{context.instagramHandle}</div><div className="profile-quote">“{context.brandSummary}”</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel"><div className="section-label">CONTENT PILLARS <span>{String(context.contentPillars.length).padStart(2, "0")}</span></div><div className="context-list">{context.contentPillars.map((pillar, index) => <div className="context-row" key={pillar}><span>{String(index + 1).padStart(2, "0")}</span><strong>{pillar}</strong></div>)}</div><button className="empty-project" onClick={onNewProject}>+ 이 방향으로 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
+  return <div className="content dashboard-page"><div className="page-heading"><div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-heading-actions"><div className="account-actions"><button className="account-action" onClick={onEditProfile}>프로필 수정</button><button className="account-action" onClick={onSignOut}>로그아웃</button></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote"><span className="profile-identity">{context.accountName}(@{context.instagramHandle})</span>{context.brandSummary.replace(/^[“"]/, "").replace(/[”"]$/, "").replace(`${context.accountName}(@${context.instagramHandle})`, "")}</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel"><div className="section-label">CONTENT PILLARS <span>{String(context.contentPillars.length).padStart(2, "0")}</span></div><div className="context-list">{context.contentPillars.map((pillar, index) => <div className="context-row" key={pillar}><span>{String(index + 1).padStart(2, "0")}</span><strong>{pillar}</strong></div>)}</div><button className="empty-project" onClick={onNewProject}>+ 이 방향으로 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
 }
 
 function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
   const [activeAssetIndex, setActiveAssetIndex] = useState(0);
-  const isReady = brief.trim() && files.length > 0 && files.every((file) => file.description.trim());
+  const isReady = brief.trim() && files.length > 0 && files.every((file) => file.description.trim()); 
   const safeAssetIndex = Math.min(activeAssetIndex, Math.max(files.length - 1, 0));
   const activeAsset = files[safeAssetIndex];
   const visibleAssetIndexes = files
@@ -569,7 +555,7 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDes
     setActiveAssetIndex((current) => Math.max(0, Math.min(current, files.length - 2)));
   }
 
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint"><span>✦</span> 여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자유롭게 적어주세요.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel"><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetIndex((index) => Math.max(0, index - 1))}>‹</button><div className="asset-carousel-track">{visibleAssetIndexes.map((index) => { const file = files[index]; const isActive = index === safeAssetIndex; return <button className={`asset-carousel-slide ${isActive ? "active" : "side"}`} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} /><span>{String(index + 1).padStart(2, "0")}</span></button>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetIndex((index) => Math.min(files.length - 1, index + 1))}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div><button type="button" onClick={removeActiveFile}>사진 삭제</button></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 남세현짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /><div className="asset-file-name">{activeAsset.name}</div></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>2. 사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel"><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetIndex((index) => Math.max(0, index - 1))}>‹</button><div className="asset-carousel-track">{visibleAssetIndexes.map((index) => { const file = files[index]; const isActive = index === safeAssetIndex; return <button className={`asset-carousel-slide ${isActive ? "active" : "side"}`} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} /><span>{String(index + 1).padStart(2, "0")}</span></button>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetIndex((index) => Math.min(files.length - 1, index + 1))}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div><button type="button" onClick={removeActiveFile}>사진 삭제</button></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 남세현짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /><div className="asset-file-name">{activeAsset.name}</div></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
 function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
