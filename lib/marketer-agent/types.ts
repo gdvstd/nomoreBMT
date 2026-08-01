@@ -66,6 +66,7 @@ export type MarketerAgentOutput = z.infer<typeof marketerAgentOutputSchema>;
 
 export type MarketerAgentEvent =
   | { type: "status"; status: "started" | "streaming" | "completed" | "failed"; message: string; runId?: string; traceId?: string }
+  | { type: "reasoning_update"; message: string }
   | { type: "assistant_delta"; text: string }
   | { type: "tool_started"; toolName: string }
   | { type: "tool_finished"; toolName: string }

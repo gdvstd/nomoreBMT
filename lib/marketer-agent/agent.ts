@@ -182,7 +182,7 @@ export async function runMarketerAgent(
   options.onEvent?.({
     type: "status",
     status: "started",
-    message: "Marketing agent started",
+    message: "마케팅 에이전트가 사진과 브랜드 컨텍스트를 전달받았어요.",
     runId,
     traceId,
   });
@@ -202,6 +202,12 @@ export async function runMarketerAgent(
       for await (const event of stream) {
         if (event.type === "raw_model_stream_event" && event.data.type === "output_text_delta") {
           options.onEvent?.({ type: "assistant_delta", text: event.data.delta });
+        }
+        if (event.type === "run_item_stream_event" && event.name === "reasoning_item_created") {
+          options.onEvent?.({
+            type: "reasoning_update",
+            message: "사진의 공통 장면을 읽고 서로 다른 두 가지 콘텐츠 각도를 비교하고 있어요.",
+          });
         }
         if (event.type === "run_item_stream_event" && event.name === "tool_called") {
           const item = event.item.rawItem;
@@ -228,7 +234,7 @@ export async function runMarketerAgent(
   options.onEvent?.({
     type: "status",
     status: "completed",
-    message: "Marketing agent completed",
+    message: "두 가지 콘텐츠 방향을 완성했어요.",
     runId,
     traceId,
   });
