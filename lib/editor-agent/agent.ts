@@ -1,4 +1,4 @@
-import { Agent, run } from "@openai/agents";
+import { Agent, generateTraceId, run, withTrace } from "@openai/agents";
 
 import { createOpenPencilAgentTools } from "./openpencil-tools";
 import {
@@ -18,18 +18,31 @@ OpenPencil document. OpenPencil is the source of truth for the document graph.
 Use its tools exactly as provided; do not invent tool names or return a design
 that was not applied to the document.
 
-Required loop:
-1. Inspect the current document and target nodes with get_selection, get_node,
+  Required loop:
+1. First call report_progress with phase "plan" and an ordered list of the
+   concrete steps you intend to execute. Use realistic percentages that add up
+   to 100 across the workflow.
+2. Before each step, call report_progress with phase "step_started".
+3. Inspect the current document and target nodes with get_selection, get_node,
    get_jsx, or describe before changing anything.
-2. Plan the card hierarchy from the selected idea card. Reuse the supplied
+4. Plan the card hierarchy from the selected idea card. Reuse the supplied
    asset manifest and existing asset node IDs whenever possible.
-3. Compose the cards using OpenPencil tools: create or update frames, place and
+   The browser preloads the user's actual images into the mapped node IDs with
+   OpenPencil's set_image_fill tool. Preserve those nodes and their image fills:
+   never use a supplied image node ID as render.replace_id. Reparent, resize,
+   and position the existing image nodes inside the card roots. Only call
+   set_image_fill when image_data is actually available. Never finish with only
+   seeded placeholder rectangles.
+5. Compose the cards using OpenPencil tools: create or update frames, place and
    crop assets, set fills/strokes/layout, and set text. Keep each card as a
    separately addressable root node.
-4. Call export_image after meaningful composition changes. Treat the returned
+6. After each meaningful step, call report_progress with phase
+   "step_completed" and the actual percent, then continue to the next step.
+7. Call export_image after meaningful composition changes. Treat the returned
    image as a visual verification checkpoint and refine spacing, hierarchy,
    contrast, cropping, and legibility when needed.
-5. Finish only after the result is actually present in the document. Return
+8. Finish only after the result is actually present in the document. Call
+   report_progress with phase "workflow_completed" at 100, then return
    concise structured metadata: card root IDs, summary, warnings, and anything
    unresolved.
 
@@ -52,6 +65,13 @@ function safeJson(value: unknown): string {
 }
 
 export function buildEditorAgentPrompt(input: EditorAgentInput): string {
+  // Browser uploads may be large data URLs. They are already hydrated into
+  // OpenPencil nodes by the editor plane, so never duplicate their bytes in
+  // the model context. Keep only the logical asset references and node IDs.
+  const promptAssets = {
+    assetSetId: input.assets.assetSetId,
+    items: input.assets.items.map(({ url: _url, ...asset }) => asset),
+  };
   return [
     "Create the requested composition in the connected OpenPencil document.",
     "\nTASK\n",
@@ -59,7 +79,7 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
     "\nSELECTED IDEA CARD\n",
     safeJson(input.ideaCard),
     "\nASSET MANIFEST\n",
-    safeJson(input.assets),
+    safeJson(promptAssets),
     "\nOPENPENCIL CONTEXT\n",
     safeJson(input.openPencil),
     "\nDESIGN PRINCIPLES\n",
@@ -73,9 +93,12 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
 export type EditorAgentOptions = {
   bridge: OpenPencilBridge;
   runId?: string;
+  traceId?: string;
+  groupId?: string;
   mode?: EditorAgentRunContext["mode"];
   model?: string;
   includeUnsafeTools?: boolean;
+  maxTurns?: number;
   onEvent?: EditorAgentRunContext["onEvent"];
 };
 
@@ -99,8 +122,12 @@ export function createEditorAgent(
 
   const agent = new Agent<EditorAgentRunContext, typeof editorAgentResultSchema>({
     name: "Editor Agent",
-    model: options.model ?? process.env.OPENAI_MODEL ?? "gpt-5.6",
+    model: options.model ?? process.env.OPENAI_MODEL ?? "gpt-5.4-mini",
     instructions: EDITOR_AGENT_INSTRUCTIONS,
+    modelSettings: {
+      parallelToolCalls: false,
+      reasoning: { summary: "concise" },
+    },
     tools: createOpenPencilAgentTools({
       includeUnsafe: options.includeUnsafeTools === undefined ? true : options.includeUnsafeTools,
     }),
@@ -115,15 +142,62 @@ export async function runEditorAgent(
   options: EditorAgentOptions,
 ): Promise<{ output: EditorAgentResult; context: EditorAgentRunContext }> {
   const runtime = createEditorAgent(input, options);
+  const traceId = options.traceId ?? generateTraceId();
+  const groupId = options.groupId ?? `editor-task:${input.task.id}`;
+  const traceMetadata = {
+    agent: "editor",
+    run_id: runtime.context.runId,
+    task_id: input.task.id,
+    idea_id: input.ideaCard.id,
+  };
+
   runtime.context.onEvent?.({
     type: "status",
     status: runtime.context.mode,
     message: "Editor agent started",
+    runId: runtime.context.runId,
+    traceId,
   });
 
-  const result = await run(runtime.agent, buildEditorAgentPrompt(input), {
-    context: runtime.context,
-  });
+  // The SDK's default tracing is enabled, but an explicit trace gives every
+  // editor run a stable dashboard/search key and keeps related retries grouped.
+  const result = await withTrace(
+    "BMT Editor Agent",
+    async () => {
+      const stream = await run(runtime.agent, buildEditorAgentPrompt(input), {
+        context: runtime.context,
+        stream: true,
+        // A multi-card composition routinely needs more than the SDK default
+        // 10 model/tool turns (inspection, per-card render, asset placement,
+        // export verification, and progress checkpoints).
+        maxTurns: options.maxTurns ?? 40,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "raw_model_stream_event" && event.data.type === "output_text_delta") {
+          runtime.context.onEvent?.({
+            type: "assistant_delta",
+            text: event.data.delta,
+          });
+        }
+
+        // Reasoning item contents are deliberately not forwarded to the
+        // browser. The UI receives a safe activity marker and the agent's
+        // explicit report_progress summaries instead of private chain-of-
+        // thought text.
+        if (event.type === "run_item_stream_event" && event.name === "reasoning_item_created") {
+          runtime.context.onEvent?.({
+            type: "reasoning_update",
+            message: "에이전트가 다음 편집 단계를 판단하고 있어요.",
+          });
+        }
+      }
+
+      await stream.completed;
+      return stream;
+    },
+    { traceId, groupId, metadata: traceMetadata },
+  );
 
   if (!result.finalOutput) {
     throw new Error("Editor agent completed without structured output");
@@ -131,9 +205,15 @@ export async function runEditorAgent(
 
   runtime.context.onEvent?.({
     type: "status",
-    status: "completed",
-    message: "Editor agent completed",
+    status: result.finalOutput.status,
+    message: result.finalOutput.status === "completed"
+      ? "Editor agent completed"
+      : result.finalOutput.status === "needs_input"
+        ? "Editor agent needs additional input or tooling"
+        : "Editor agent failed",
     output: result.finalOutput,
+    runId: runtime.context.runId,
+    traceId,
   });
 
   return { output: result.finalOutput, context: runtime.context };

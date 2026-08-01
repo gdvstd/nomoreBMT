@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
@@ -17,6 +17,13 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ALLOWED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024;
 
+
+type AgentLogEntry = {
+  id: string;
+  kind: "reasoning" | "tool" | "status";
+  label: string;
+  detail?: string;
+};
 
 const EditorPlaneMount = dynamic(() => import("@/app/components/EditorPlaneMount"), {
   ssr: false,
@@ -49,9 +56,19 @@ export default function Home() {
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasError, setIdeasError] = useState("");
   const [fileError, setFileError] = useState("");
+  const [ideasCurrentReasoning, setIdeasCurrentReasoning] = useState("마케팅 agent 실행을 준비하고 있어요.");
+  const [ideasRecentTool, setIdeasRecentTool] = useState("호출 대기 중");
+  const [ideasEventLog, setIdeasEventLog] = useState<AgentLogEntry[]>([]);
+  const [ideasStreamText, setIdeasStreamText] = useState("");
+  const [ideasTraceId, setIdeasTraceId] = useState("");
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [renderedPost, setRenderedPost] = useState<RenderedPost | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
+  const marketerStream = useRef<EventSource | null>(null);
+
+  useEffect(() => () => {
+    marketerStream.current?.close();
+  }, []);
 
   const currentStep = steps.findIndex((step) => step.id === screen);
   const profileSummary = useMemo(() => {
@@ -117,8 +134,15 @@ export default function Home() {
   }
 
   async function generateIdeas() {
+    marketerStream.current?.close();
     setIdeasLoading(true);
     setIdeasError("");
+    const initialMessage = "마케팅 agent 실행을 준비하고 있어요.";
+    setIdeasCurrentReasoning(initialMessage);
+    setIdeasRecentTool("호출 대기 중");
+    setIdeasEventLog([{ id: `${Date.now()}-start`, kind: "status", label: initialMessage }]);
+    setIdeasStreamText("");
+    setIdeasTraceId("");
     setSelectedIdea(null);
     setScreen("ideas");
 
@@ -146,16 +170,126 @@ export default function Home() {
         }),
       });
 
-      const payload = await response.json() as { ideas?: Idea[]; error?: string };
-      if (!response.ok || !payload.ideas) throw new Error(payload.error ?? "아이디어를 만들지 못했어요");
-      setIdeas(payload.ideas);
+      const payload = await response.json() as {
+        ideas?: Idea[];
+        error?: string;
+        bridgeSessionId?: string;
+        traceId?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "아이디어를 만들지 못했어요");
+
+      // Keep compatibility with an older synchronous server response while
+      // the current route uses a queued SSE stream.
+      if (payload.ideas) {
+        setIdeas(payload.ideas);
+        setIdeasLoading(false);
+        return;
+      }
+      if (!payload.bridgeSessionId) throw new Error("마케팅 agent stream을 시작하지 못했어요");
+
+      setIdeasTraceId(payload.traceId ?? "");
+      const stream = new EventSource(`/api/marketer-bridge/${payload.bridgeSessionId}/stream`);
+      marketerStream.current = stream;
+      stream.addEventListener("agent_event", (event) => {
+        if (marketerStream.current !== stream) return;
+        const detail = JSON.parse((event as MessageEvent<string>).data) as {
+          event?: {
+            type?: string;
+            status?: string;
+            message?: string;
+            text?: string;
+            toolName?: string;
+            ideas?: Idea[];
+            traceId?: string;
+          };
+        };
+        const agentEvent = detail.event;
+        if (!agentEvent) return;
+        if (agentEvent.traceId) setIdeasTraceId(agentEvent.traceId);
+        if (agentEvent.type === "assistant_delta" && agentEvent.text) {
+          setIdeasStreamText((previous) => `${previous}${agentEvent.text}`.slice(-20000));
+        }
+        if (agentEvent.type === "status" && agentEvent.message) {
+          setIdeasCurrentReasoning(agentEvent.message);
+          setIdeasEventLog((previous) => [{
+            id: `${Date.now()}-${previous.length}`,
+            kind: (agentEvent.status === "failed" ? "status" : "reasoning") as AgentLogEntry["kind"],
+            label: agentEvent.message!,
+            detail: agentEvent.status,
+          }, ...previous].slice(0, 40));
+        }
+        if (agentEvent.type === "tool_started" && agentEvent.toolName) {
+          setIdeasRecentTool(`${agentEvent.toolName} 실행 중`);
+          setIdeasEventLog((previous) => [{
+            id: `${Date.now()}-${previous.length}`,
+            kind: "tool" as const,
+            label: agentEvent.toolName!,
+            detail: "실행 시작",
+          }, ...previous].slice(0, 40));
+        }
+        if (agentEvent.type === "tool_finished" && agentEvent.toolName) {
+          setIdeasRecentTool(`${agentEvent.toolName} 완료`);
+          setIdeasEventLog((previous) => [{
+            id: `${Date.now()}-${previous.length}`,
+            kind: "tool" as const,
+            label: agentEvent.toolName!,
+            detail: "실행 완료",
+          }, ...previous].slice(0, 40));
+        }
+        if (agentEvent.type === "result" && agentEvent.ideas) {
+          const resultMessage = "두 가지 아이디어를 정리했어요.";
+          setIdeasCurrentReasoning(resultMessage);
+          setIdeasEventLog((previous) => [{
+            id: `${Date.now()}-result`,
+            kind: "status" as const,
+            label: resultMessage,
+            detail: "completed",
+          }, ...previous].slice(0, 40));
+          setIdeas(agentEvent.ideas);
+          setIdeasLoading(false);
+          stream.close();
+          marketerStream.current = null;
+        }
+        if (agentEvent.type === "status" && agentEvent.status === "failed") {
+          setIdeasLoading(false);
+          setIdeas(mockIdeas);
+          setIdeasError(agentEvent.message ?? "마케팅 agent가 실패했어요");
+          stream.close();
+          marketerStream.current = null;
+        }
+      });
+      stream.addEventListener("error", () => {
+        if (marketerStream.current !== stream) return;
+        const errorMessage = "마케팅 agent stream 연결이 끊겼어요";
+        setIdeasCurrentReasoning(errorMessage);
+        setIdeasEventLog((previous) => [{
+          id: `${Date.now()}-stream-error`,
+          kind: "status" as const,
+          label: errorMessage,
+          detail: "error",
+        }, ...previous].slice(0, 40));
+        setIdeasLoading(false);
+        setIdeas(mockIdeas);
+        setIdeasError(errorMessage);
+        stream.close();
+        marketerStream.current = null;
+      });
     } catch (error) {
       // The local UI remains explorable without credentials; the banner makes
       // it explicit that these are the existing mock ideas, not an agent run.
       setIdeas(mockIdeas);
-      setIdeasError(error instanceof Error ? error.message : "마케팅 에이전트를 실행하지 못했어요");
-    } finally {
+      const errorMessage = error instanceof Error ? error.message : "마케팅 에이전트를 실행하지 못했어요";
+      setIdeasCurrentReasoning(errorMessage);
+      setIdeasEventLog((previous) => [{
+        id: `${Date.now()}-request-error`,
+        kind: "status" as const,
+        label: errorMessage,
+        detail: "error",
+      }, ...previous].slice(0, 40));
+      setIdeasError(errorMessage);
       setIdeasLoading(false);
+    } finally {
+      // The SSE completion event owns loading=false for an async run.
     }
   }
 
@@ -214,11 +348,11 @@ export default function Home() {
         )}
 
         {screen === "ideas" && (
-          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
+          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} currentReasoning={ideasCurrentReasoning} recentTool={ideasRecentTool} eventLog={ideasEventLog} streamText={ideasStreamText} traceId={ideasTraceId} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
         {screen === "editor" && selectedIdea && (
-          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetNames={files.map((file) => file.name)} onBack={() => setScreen("ideas")} onFinish={() => setScreen("review")} />
+          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result) => { setRenderedPost((post) => post ? { ...post, previewImageUrl: result?.imageDataUrl } : (selectedIdea ? { ...renderMockPost(selectedIdea.id), previewImageUrl: result?.imageDataUrl } : null)); setActiveSlide(0); setScreen("review"); }} />
         )}
 
         {screen === "review" && renderedPost && (
@@ -260,11 +394,81 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDes
   return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 사진마다 그 순간의 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint"><span>✦</span> 여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자유롭게 적어주세요.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><h2>사진마다 이야기를 더해주세요.</h2><p>장소, 날짜, 메뉴, 기억에 남은 점처럼 사진만으로 알 수 없는 정보를 적어주세요.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 20MB · 최대 30장</span></label> : <><div className="asset-carousel"><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetIndex((index) => Math.max(0, index - 1))}>‹</button><div className="asset-carousel-track">{visibleAssetIndexes.map((index) => { const file = files[index]; const isActive = index === safeAssetIndex; return <button className={`asset-carousel-slide ${isActive ? "active" : "side"}`} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} /><span>{String(index + 1).padStart(2, "0")}</span></button>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetIndex((index) => Math.min(files.length - 1, index + 1))}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetIndex(index)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요</strong></div><button type="button" onClick={removeActiveFile}>사진 삭제</button></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="예: 여행 2일차에 남세현짬뽕에 갔어요. 고기짬뽕이 정말 맛있었고 점심에는 20분 정도 기다렸어요." /><div className="asset-file-name">{activeAsset.name}</div></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
 }
 
-function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
-  return <div className="content ideas-screen"><div className="page-heading"><div><div className="content-kicker">MARKETER AGENT / 02</div><h1>두 가지 방향을<br /><em>준비했어요.</em></h1><p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p></div><div className="agent-status"><span className={`status-orb ${loading ? "" : "green"}`} /> {loading ? "MARKETER AGENT / THINKING" : "MARKETER AGENT"}<br /><small>{loading ? "ONE INFERENCE" : "2 IDEAS READY"}</small></div></div>{error && <div className="brief-hint"><span>!</span> {error} · 현재 화면은 mock 아이디어입니다.</div>}<div className="idea-grid">{loading ? <div className="idea-card" aria-busy="true"><div className="idea-card-body"><div className="idea-label">MARKETING AGENT</div><h2>사진을 살펴보고 있어요…</h2><p>한 번의 inference로 서로 다른 두 가지 카드 아이디어를 구성하고 있습니다.</p></div></div> : ideas.map((idea) => <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} key={idea.id} onClick={() => onSelect(idea)}><div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.id === "guide" ? "A GUIDE\nTO GANGNEUNG" : "NOTES FROM\nGANGNEUNG"}</span><i>✦</i></div><div className="idea-card-body"><div className="idea-label">{idea.label}</div><h2>{idea.title}</h2><p>{idea.description}</p><div className="idea-meta"><span>{idea.format}</span><span>{idea.assets.join(" · ")}</span></div></div><div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div></button>)}</div><div className="idea-footer"><button className="secondary-button" onClick={onBack}>← 요청 수정</button><button className="primary-button" disabled={!selectedIdea || loading} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button></div></div>;
+function Ideas({ ideas, loading, error, currentReasoning, recentTool, eventLog, streamText, traceId, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; currentReasoning: string; recentTool: string; eventLog: AgentLogEntry[]; streamText: string; traceId: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
+  const streamPreview = streamText.replace(/\s+/g, " ").trim().slice(-260);
+  const fallbackEvent: AgentLogEntry = { id: "waiting", kind: "status", label: "run 시작 대기 중" };
+  return (
+    <div className="content ideas-screen">
+      <div className="page-heading">
+        <div>
+          <div className="content-kicker">MARKETER AGENT / 02</div>
+          <h1>두 가지 방향을<br /><em>준비했어요.</em></h1>
+          <p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p>
+        </div>
+        <div className="agent-status">
+          <span className={`status-orb ${loading ? "" : "green"}`} /> {loading ? "MARKETER AGENT / STREAMING" : "MARKETER AGENT"}
+          <br />
+          <small>{loading ? "ONE INFERENCE · LIVE" : "2 IDEAS READY"}</small>
+          {traceId && <small title={traceId}>TRACE {traceId.slice(-10)}</small>}
+        </div>
+      </div>
+      {error && <div className="brief-hint"><span>!</span> {error} · 현재 화면은 mock 아이디어입니다.</div>}
+      <div className="idea-grid">
+        {loading ? (
+          <div className="idea-card idea-card-stream" aria-busy="true">
+            <div className="idea-card-body">
+              <div className="idea-label">MARKETING AGENT / LIVE RUN</div>
+              <h2>사진을 살펴보고 있어요…</h2>
+              <p>한 번의 inference로 서로 다른 두 가지 카드 아이디어를 구성하고 있습니다.</p>
+              <div className="marketer-run-summary">
+                <div className="marketer-run-row">
+                  <span className="marketer-run-icon">✦</span>
+                  <div><span className="marketer-run-label">CURRENT REASONING</span><strong>{currentReasoning}</strong></div>
+                </div>
+                <div className="marketer-run-row">
+                  <span className="marketer-run-icon">⌁</span>
+                  <div><span className="marketer-run-label">MOST RECENT TOOL</span><strong>{recentTool}</strong></div>
+                </div>
+              </div>
+              <details className="marketer-event-details">
+                <summary>전체 reasoning · tool 로그 <span>{eventLog.length}</span></summary>
+                <div className="marketer-event-log">
+                  {(eventLog.length ? eventLog : [fallbackEvent]).map((entry) => (
+                    <div className={`marketer-event-row ${entry.kind}`} key={entry.id}>
+                      <span>{entry.kind === "tool" ? "TOOL" : entry.kind === "reasoning" ? "REASONING" : "STATUS"}</span>
+                      <p><strong>{entry.label}</strong>{entry.detail && <small>{entry.detail}</small>}</p>
+                    </div>
+                  ))}
+                </div>
+                {streamPreview && <div className="marketer-output-details"><div className="marketer-run-label">MODEL OUTPUT STREAM</div><pre>{streamText}</pre></div>}
+              </details>
+            </div>
+          </div>
+        ) : (
+          ideas.map((idea) => (
+            <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} key={idea.id} onClick={() => onSelect(idea)}>
+              <div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.id === "guide" ? "A GUIDE\nTO GANGNEUNG" : "NOTES FROM\nGANGNEUNG"}</span><i>✦</i></div>
+              <div className="idea-card-body">
+                <div className="idea-label">{idea.label}</div>
+                <h2>{idea.title}</h2>
+                <p>{idea.description}</p>
+                <div className="idea-meta"><span>{idea.format}</span><span>{idea.assets.join(" · ")}</span></div>
+              </div>
+              <div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div>
+            </button>
+          ))
+        )}
+      </div>
+      <div className="idea-footer">
+        <button className="secondary-button" onClick={onBack}>← 요청 수정</button>
+        <button className="primary-button" disabled={!selectedIdea || loading} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button>
+      </div>
+    </div>
+  );
 }
 
 function Review({ post, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
   const slide = post.slides[activeSlide];
-  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient}`}><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>seoyeon.studio</span><span>✦</span></div></div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={() => window.alert("다운로드 준비가 완료됐어요. (MVP Mock)")}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
+  const previewImage = post.previewImageUrl ? <img className="agent-rendered-image" src={post.previewImageUrl} alt="편집자 에이전트 결과" /> : null;
+  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${post.previewImageUrl ? "agent-rendered" : ""}`}>{previewImage}<div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>seoyeon.studio</span><span>✦</span></div></div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={() => window.alert("다운로드 준비가 완료됐어요. (MVP Mock)")}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
 }

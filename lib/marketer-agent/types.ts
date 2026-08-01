@@ -47,3 +47,10 @@ export const marketerAgentOutputSchema = z.object({
 export type MarketerAgentInput = z.infer<typeof marketerAgentInputSchema>;
 export type MarketerIdeaCard = z.infer<typeof marketerIdeaCardSchema>;
 export type MarketerAgentOutput = z.infer<typeof marketerAgentOutputSchema>;
+
+export type MarketerAgentEvent =
+  | { type: "status"; status: "started" | "streaming" | "completed" | "failed"; message: string; runId?: string; traceId?: string }
+  | { type: "assistant_delta"; text: string }
+  | { type: "tool_started"; toolName: string }
+  | { type: "tool_finished"; toolName: string }
+  | { type: "result"; ideas: MarketerIdeaCard[] };

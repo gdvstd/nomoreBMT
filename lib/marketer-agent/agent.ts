@@ -1,8 +1,9 @@
-import { Agent, run, user, type AgentInputItem } from "@openai/agents";
+import { Agent, generateTraceId, run, user, withTrace, type AgentInputItem } from "@openai/agents";
 
 import {
   marketerAgentOutputSchema,
   type MarketerAgentInput,
+  type MarketerAgentEvent,
   type MarketerAgentOutput,
 } from "./types";
 
@@ -81,19 +82,87 @@ export function buildMarketerAgentInput(input: MarketerAgentInput): AgentInputIt
 export function createMarketerAgent(options?: { model?: string }) {
   return new Agent({
     name: "Marketing Agent",
-    model: options?.model ?? process.env.OPENAI_REFERENCE_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-5.6",
+    model: options?.model ?? process.env.OPENAI_REFERENCE_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-5.4-mini",
     instructions: MARKETER_AGENT_INSTRUCTIONS,
     outputType: marketerAgentOutputSchema,
   });
 }
 
-/** One run() call, with no Instagram tools or follow-up inference. */
+export type MarketerAgentOptions = {
+  model?: string;
+  runId?: string;
+  traceId?: string;
+  groupId?: string;
+  onEvent?: (event: MarketerAgentEvent) => void;
+};
+
+/** One streamed run() call, with no Instagram tools or follow-up inference. */
 export async function runMarketerAgent(
   input: MarketerAgentInput,
-  options?: { model?: string },
+  options: MarketerAgentOptions = {},
 ): Promise<MarketerAgentOutput> {
   const agent = createMarketerAgent(options);
-  const result = await run(agent, buildMarketerAgentInput(input));
+  const runId = options.runId ?? crypto.randomUUID();
+  const traceId = options.traceId ?? generateTraceId();
+  const groupId = options.groupId ?? `marketer-task:${input.taskId}`;
+  const traceMetadata = {
+    agent: "marketer",
+    run_id: runId,
+    task_id: input.taskId,
+    asset_set_id: input.assets.assetSetId,
+  };
+
+  options.onEvent?.({
+    type: "status",
+    status: "started",
+    message: "Marketing agent started",
+    runId,
+    traceId,
+  });
+
+  const result = await withTrace(
+    "BMT Marketing Agent",
+    async () => {
+      const stream = await run(agent, buildMarketerAgentInput(input), { stream: true });
+      options.onEvent?.({
+        type: "status",
+        status: "streaming",
+        message: "사진과 요청을 분석하고 두 가지 방향을 구성하고 있어요.",
+        runId,
+        traceId,
+      });
+
+      for await (const event of stream) {
+        if (event.type === "raw_model_stream_event" && event.data.type === "output_text_delta") {
+          options.onEvent?.({ type: "assistant_delta", text: event.data.delta });
+        }
+        if (event.type === "run_item_stream_event" && event.name === "tool_called") {
+          const item = event.item.rawItem;
+          if (item && item.type === "function_call") {
+            options.onEvent?.({ type: "tool_started", toolName: item.name });
+          }
+        }
+        if (event.type === "run_item_stream_event" && event.name === "tool_output") {
+          const item = event.item.rawItem;
+          if (item && item.type === "function_call_result") {
+            options.onEvent?.({ type: "tool_finished", toolName: item.name });
+          }
+        }
+      }
+
+      await stream.completed;
+      return stream;
+    },
+    { traceId, groupId, metadata: traceMetadata },
+  );
   if (!result.finalOutput) throw new Error("Marketing agent completed without structured output");
+  options.onEvent?.({ type: "result", ideas: result.finalOutput.ideas });
+  options.onEvent?.({
+    type: "status",
+    status: "completed",
+    message: "Marketing agent completed",
+    runId,
+    traceId,
+  });
   return result.finalOutput;
 }

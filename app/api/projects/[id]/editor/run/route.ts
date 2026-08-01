@@ -8,6 +8,7 @@ import {
   createSessionBridge,
 } from "@/lib/editor-agent/bridge-session";
 import { editorAgentInputSchema } from "@/lib/editor-agent/types";
+import { generateTraceId } from "@openai/agents";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -40,6 +41,8 @@ export async function POST(request: Request, { params }: Params) {
 
   const session = createEditorBridgeSession();
   const runId = crypto.randomUUID();
+  const traceId = generateTraceId();
+  const groupId = `editor-project:${projectId}`;
   const input = parsed.data;
 
   // Start asynchronously so the caller can immediately open the bridge
@@ -47,6 +50,8 @@ export async function POST(request: Request, { params }: Params) {
   void runEditorAgent(input, {
     bridge: createSessionBridge(session),
     runId,
+    traceId,
+    groupId,
     mode: session.mode,
     onEvent: (event) => session.emitAgentEvent(event),
   }).catch((error) => {
@@ -54,6 +59,8 @@ export async function POST(request: Request, { params }: Params) {
       type: "status",
       status: "failed",
       message: error instanceof Error ? error.message : String(error),
+      runId,
+      traceId,
     });
     session.emit({ type: "error", message: error instanceof Error ? error.message : String(error) });
   });
@@ -62,6 +69,8 @@ export async function POST(request: Request, { params }: Params) {
     status: "EDITOR_AGENT_STARTED",
     projectId,
     runId,
+    traceId,
+    groupId,
     bridgeSessionId: session.id,
   }, { status: 202 });
 }
