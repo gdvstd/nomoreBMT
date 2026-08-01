@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
 
+type UploadedAsset = { name: string; dataUrl: string };
+
 const EditorPlaneMount = dynamic(() => import("@/app/components/EditorPlaneMount"), {
   ssr: false,
   loading: () => <div className="vue-editor-mount" aria-label="편집기를 불러오는 중" />,
@@ -18,11 +20,23 @@ const steps: { id: Screen; label: string; number: string }[] = [
   { id: "review", label: "게시물 검토", number: "05" },
 ];
 
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("파일을 읽지 못했어요"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("onboarding");
   const [brandText, setBrandText] = useState("");
   const [brief, setBrief] = useState("");
-  const [files, setFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<UploadedAsset[]>([]);
+  const [ideas, setIdeas] = useState<Idea[]>(mockIdeas);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [ideasError, setIdeasError] = useState("");
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [renderedPost, setRenderedPost] = useState<RenderedPost | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
@@ -33,9 +47,13 @@ export default function Home() {
     return brandText.length > 52 ? `${brandText.slice(0, 52)}…` : brandText;
   }, [brandText]);
 
-  function handleFiles(event: ChangeEvent<HTMLInputElement>) {
-    const selected = Array.from(event.target.files ?? []).map((file) => file.name);
-    setFiles((previous) => [...previous, ...selected].slice(0, 30));
+  async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
+    const loaded = await Promise.all(selected.map(async (file) => ({
+      name: file.name,
+      dataUrl: await readFileAsDataUrl(file),
+    })));
+    setFiles((previous) => [...previous, ...loaded].slice(0, 30));
   }
 
   function removeFile(index: number) {
@@ -52,6 +70,48 @@ export default function Home() {
     setRenderedPost(renderMockPost(selectedIdea.id));
     setActiveSlide(0);
     setScreen("editor");
+  }
+
+  async function generateIdeas() {
+    setIdeasLoading(true);
+    setIdeasError("");
+    setSelectedIdea(null);
+    setScreen("ideas");
+
+    try {
+      const projectId = crypto.randomUUID();
+      const response = await fetch(`/api/projects/${projectId}/ideas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: projectId,
+          request: brief,
+          brandDirection: brandText,
+          language: "ko",
+          target: "instagram_carousel",
+          assets: {
+            assetSetId: projectId,
+            items: files.map((file, index) => ({
+              assetId: `${projectId}-asset-${index + 1}`,
+              kind: "image",
+              name: file.name,
+              url: file.dataUrl,
+            })),
+          },
+        }),
+      });
+
+      const payload = await response.json() as { ideas?: Idea[]; error?: string };
+      if (!response.ok || !payload.ideas) throw new Error(payload.error ?? "아이디어를 만들지 못했어요");
+      setIdeas(payload.ideas);
+    } catch (error) {
+      // The local UI remains explorable without credentials; the banner makes
+      // it explicit that these are the existing mock ideas, not an agent run.
+      setIdeas(mockIdeas);
+      setIdeasError(error instanceof Error ? error.message : "마케팅 에이전트를 실행하지 못했어요");
+    } finally {
+      setIdeasLoading(false);
+    }
   }
 
   return (
@@ -105,15 +165,15 @@ export default function Home() {
         )}
 
         {screen === "brief" && (
-          <Brief brief={brief} setBrief={setBrief} files={files} onFiles={handleFiles} onRemoveFile={removeFile} onBack={() => setScreen("dashboard")} onContinue={() => setScreen("ideas")} />
+          <Brief brief={brief} setBrief={setBrief} files={files} onFiles={handleFiles} onRemoveFile={removeFile} onBack={() => setScreen("dashboard")} onContinue={generateIdeas} />
         )}
 
         {screen === "ideas" && (
-          <Ideas selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
+          <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
         {screen === "editor" && selectedIdea && (
-          <EditorPlaneMount idea={selectedIdea} onBack={() => setScreen("ideas")} onFinish={() => setScreen("review")} />
+          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetNames={files.map((file) => file.name)} onBack={() => setScreen("ideas")} onFinish={() => setScreen("review")} />
         )}
 
         {screen === "review" && renderedPost && (
@@ -138,12 +198,12 @@ function Dashboard({ brandText, onNewProject }: { brandText: string; onNewProjec
   return <div className="content"><div className="page-heading"><div><div className="content-kicker">WORKSPACE / OVERVIEW</div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote">“{brandText}”</div><div className="profile-tags"><span>여행</span><span>맛집</span><span>따뜻한 톤</span></div><button className="text-button">프로필 자세히 보기 →</button></div><div className="activity-panel"><div className="section-label">RECENT PROJECTS <span>01</span></div><div className="project-row"><div className="project-art art-coast"><span>강릉</span></div><div className="project-info"><strong>강릉 미식 여행</strong><span>아이디어 선택 대기 중 · 오늘</span></div><span className="status-pill">DRAFT</span></div><button className="empty-project" onClick={onNewProject}>+ 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>TIP</span><p>사진이 많을수록 좋아요. 한 번의 여행에서 발견한 장면을 한꺼번에 올려보세요.</p></div></div>;
 }
 
-function Brief({ brief, setBrief, files, onFiles, onRemoveFile, onBack, onContinue }: { brief: string; setBrief: (value: string) => void; files: string[]; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onBack: () => void; onContinue: () => void }) {
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>무엇을<br /><em>만들어볼까요?</em></h1><p className="heading-description">사진을 올리고, 이번 게시물에서 전하고 싶은 이야기를 알려주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="brief-grid"><div className="upload-card"><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><label className="upload-zone"><input type="file" accept="image/*" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, PNG · 사진은 비공개로 안전하게 보관됩니다</span></label>{files.length > 0 && <div className="file-list">{files.map((file, index) => <div className="file-row" key={`${file}-${index}`}><span className="file-thumb">{String(index + 1).padStart(2, "0")}</span><span>{file}</span><button onClick={() => onRemoveFile(index)} aria-label={`${file} 제거`}>×</button></div>)}</div>}</div><div className="brief-form"><div className="section-label">THE BRIEF</div><label htmlFor="brief">이번 게시물로 무엇을 전하고 싶나요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 강릉에서 다녀온 맛집들을 추천하는 저장용 캐러셀을 만들어줘. 사진의 따뜻한 분위기는 살리고, 정보도 한눈에 들어오게 해줘." /><div className="brief-hint"><span>✦</span> 장소명, 제품명, 반드시 넣을 정보를 함께 적어주면 더 좋아요.</div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 이전</button><button className="primary-button" disabled={!brief.trim() || files.length === 0} onClick={onContinue}>아이디어 받아보기 <span>→</span></button></div></div></div></div>;
+function Brief({ brief, setBrief, files, onFiles, onRemoveFile, onBack, onContinue }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onBack: () => void; onContinue: () => void }) {
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>무엇을<br /><em>만들어볼까요?</em></h1><p className="heading-description">사진을 올리고, 이번 게시물에서 전하고 싶은 이야기를 알려주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="brief-grid"><div className="upload-card"><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 30 FILES"}</span></div><label className="upload-zone"><input type="file" accept="image/*" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, PNG · 사진은 비공개로 안전하게 보관됩니다</span></label>{files.length > 0 && <div className="file-list">{files.map((file, index) => <div className="file-row" key={`${file.name}-${index}`}><span className="file-thumb">{String(index + 1).padStart(2, "0")}</span><span>{file.name}</span><button onClick={() => onRemoveFile(index)} aria-label={`${file.name} 제거`}>×</button></div>)}</div>}</div><div className="brief-form"><div className="section-label">THE BRIEF</div><label htmlFor="brief">이번 게시물로 무엇을 전하고 싶나요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 강릉에서 다녀온 맛집들을 추천하는 저장용 캐러셀을 만들어줘. 사진의 따뜻한 분위기는 살리고, 정보도 한눈에 들어오게 해줘." /><div className="brief-hint"><span>✦</span> 장소명, 제품명, 반드시 넣을 정보를 함께 적어주면 더 좋아요.</div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 이전</button><button className="primary-button" disabled={!brief.trim() || files.length === 0} onClick={onContinue}>아이디어 받아보기 <span>→</span></button></div></div></div></div>;
 }
 
-function Ideas({ selectedIdea, onSelect, onBack, onContinue }: { selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
-  return <div className="content ideas-screen"><div className="page-heading"><div><div className="content-kicker">MARKETER AGENT / 02</div><h1>두 가지 방향을<br /><em>준비했어요.</em></h1><p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p></div><div className="agent-status"><span className="status-orb" /> MARKETER AGENT<br /><small>2 IDEAS READY</small></div></div><div className="idea-grid">{mockIdeas.map((idea) => <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} key={idea.id} onClick={() => onSelect(idea)}><div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.id === "guide" ? "A GUIDE\nTO GANGNEUNG" : "NOTES FROM\nGANGNEUNG"}</span><i>✦</i></div><div className="idea-card-body"><div className="idea-label">{idea.label}</div><h2>{idea.title}</h2><p>{idea.description}</p><div className="idea-meta"><span>{idea.format}</span><span>{idea.assets.join(" · ")}</span></div></div><div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div></button>)}</div><div className="idea-footer"><button className="secondary-button" onClick={onBack}>← 요청 수정</button><button className="primary-button" disabled={!selectedIdea} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button></div></div>;
+function Ideas({ ideas, loading, error, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; loading: boolean; error: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
+  return <div className="content ideas-screen"><div className="page-heading"><div><div className="content-kicker">MARKETER AGENT / 02</div><h1>두 가지 방향을<br /><em>준비했어요.</em></h1><p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p></div><div className="agent-status"><span className={`status-orb ${loading ? "" : "green"}`} /> {loading ? "MARKETER AGENT / THINKING" : "MARKETER AGENT"}<br /><small>{loading ? "ONE INFERENCE" : "2 IDEAS READY"}</small></div></div>{error && <div className="brief-hint"><span>!</span> {error} · 현재 화면은 mock 아이디어입니다.</div>}<div className="idea-grid">{loading ? <div className="idea-card" aria-busy="true"><div className="idea-card-body"><div className="idea-label">MARKETING AGENT</div><h2>사진을 살펴보고 있어요…</h2><p>한 번의 inference로 서로 다른 두 가지 카드 아이디어를 구성하고 있습니다.</p></div></div> : ideas.map((idea) => <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} key={idea.id} onClick={() => onSelect(idea)}><div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.id === "guide" ? "A GUIDE\nTO GANGNEUNG" : "NOTES FROM\nGANGNEUNG"}</span><i>✦</i></div><div className="idea-card-body"><div className="idea-label">{idea.label}</div><h2>{idea.title}</h2><p>{idea.description}</p><div className="idea-meta"><span>{idea.format}</span><span>{idea.assets.join(" · ")}</span></div></div><div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div></button>)}</div><div className="idea-footer"><button className="secondary-button" onClick={onBack}>← 요청 수정</button><button className="primary-button" disabled={!selectedIdea || loading} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button></div></div>;
 }
 
 function Review({ post, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
