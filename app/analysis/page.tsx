@@ -83,7 +83,7 @@ export default function InstagramAnalysisPage() {
   return (
     <main className="analysis-shell">
       <header className="analysis-header">
-        <a href="/" className="analysis-brand"><span>B</span> BMT</a>
+        <a href="/" className="analysis-brand"><span>NOMORE</span><b>BMT</b></a>
         <a href="/" className="analysis-back">← 제작 화면으로</a>
       </header>
 

@@ -18,6 +18,8 @@ export const marketerAgentInputSchema = z.object({
   taskId: z.string(),
   request: z.string().min(1),
   brandDirection: z.string().default(""),
+  /** Reusable onboarding profile shared with downstream agents. */
+  brandContext: z.unknown().optional(),
   language: z.string().default("ko"),
   target: z.string().default("instagram_carousel"),
   assets: z.object({

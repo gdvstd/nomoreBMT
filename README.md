@@ -1,6 +1,6 @@
 # BMT · Personal Brand Studio
 
-The first web-app skeleton for the personal branding platform. It currently ships a browser-only control flow with mock Agent responses:
+The first web-app skeleton for the personal branding platform:
 
 `onboarding → project brief → idea selection → post review`
 
@@ -13,7 +13,27 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The Supabase client and environment variable template are included as integration points. The current demo intentionally runs without credentials so the product flow can be reviewed before the Agent implementations are selected.
+## Onboarding brand context
+
+The onboarding screen collects the account name, Instagram ID, desired mood,
+main topics, and formats to preserve. `POST /api/onboarding/context` converts
+those answers into a structured brand context with separate marketer and editor
+instructions.
+
+The browser always persists the result locally. When Supabase is configured and
+the visitor is authenticated, it also upserts the profile into
+`user_brand_contexts`. Apply
+`supabase/migrations/202608010001_create_user_brand_contexts.sql` before enabling
+database sync. The table uses row-level security so users can access only their
+own context.
+
+The full structured context is sent to both downstream agents:
+
+- the marketer uses it for hooks, content angles, and format decisions;
+- the editor uses it for voice, hierarchy, image treatment, and slide flow.
+
+The Instagram ID is stored as account identity for later analysis. It does not
+replace Instagram OAuth or the access token required by the Graph API.
 
 ## Instagram context model
 
@@ -33,10 +53,15 @@ Copy `.env.example` to `.env.local` and configure:
 
 ```bash
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6
+OPENAI_MODEL=gpt-5.4-mini
+APIFY_API_TOKEN=
 INSTAGRAM_ACCESS_TOKEN=
 INSTAGRAM_API_VERSION=v23.0
 ```
+
+`APIFY_API_TOKEN` is a server-only credential for public Instagram reference
+discovery. Keep its real value only in `.env.local` and never prefix it with
+`NEXT_PUBLIC_`.
 
 `INSTAGRAM_USER_ID` may contain a username for local notes; the runtime resolves
 the numeric account ID from the access token. App ID and App Secret are reserved

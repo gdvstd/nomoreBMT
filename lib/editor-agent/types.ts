@@ -65,6 +65,8 @@ export const editorAgentInputSchema = z.object({
   }),
   openPencil: openPencilContextSchema,
   designPrinciples: editorDesignPrinciplesSchema,
+  /** Stable brand profile generated from the user's onboarding answers. */
+  brandContext: z.unknown().optional(),
   marketerContext: z.unknown().optional(),
 });
 
