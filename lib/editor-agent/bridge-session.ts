@@ -110,7 +110,15 @@ export class EditorBridgeSession {
   }
 }
 
-const sessions = new Map<string, EditorBridgeSession>();
+// Next.js may compile POST, SSE, and response route handlers into separate
+// server bundles during development. A module-local Map then makes the SSE
+// route report "session not found" even though the run was just created.
+type EditorBridgeGlobal = typeof globalThis & {
+  __bmtEditorBridgeSessions?: Map<string, EditorBridgeSession>;
+};
+
+const bridgeGlobal = globalThis as EditorBridgeGlobal;
+const sessions = bridgeGlobal.__bmtEditorBridgeSessions ??= new Map<string, EditorBridgeSession>();
 
 export function createEditorBridgeSession() {
   const session = new EditorBridgeSession();

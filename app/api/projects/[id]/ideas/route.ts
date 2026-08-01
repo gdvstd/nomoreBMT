@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { runMarketerAgent } from "@/lib/marketer-agent";
+import { createMarketerBridgeSession } from "@/lib/marketer-agent/bridge-session";
 import { marketerAgentInputSchema } from "@/lib/marketer-agent/types";
+import { generateTraceId } from "@openai/agents";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -30,13 +32,36 @@ export async function POST(request: Request, { params }: Params) {
     );
   }
 
-  try {
-    const output = await runMarketerAgent(parsed.data);
-    return NextResponse.json({ status: "IDEAS_READY", ...output });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 502 },
-    );
-  }
+  const session = createMarketerBridgeSession();
+  const runId = crypto.randomUUID();
+  const traceId = generateTraceId();
+  const groupId = `marketer-project:${projectId}`;
+
+  // Return immediately so the ideas screen can subscribe to run/tool events
+  // while the single marketing inference is still in progress.
+  void runMarketerAgent(parsed.data, {
+    runId,
+    traceId,
+    groupId,
+    onEvent: (event) => session.emitAgentEvent(event),
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    session.emitAgentEvent({
+      type: "status",
+      status: "failed",
+      message,
+      runId,
+      traceId,
+    });
+    session.emit({ type: "error", message });
+  });
+
+  return NextResponse.json({
+    status: "MARKETER_AGENT_STARTED",
+    projectId,
+    runId,
+    traceId,
+    groupId,
+    bridgeSessionId: session.id,
+  }, { status: 202 });
 }

@@ -23,9 +23,9 @@ type Props = {
   ideaAssets: string[];
   task: string;
   brandText: string;
-  assetNames: string[];
+  assetItems: { name: string; dataUrl: string }[];
   onBack: () => void;
-  onFinish: () => void;
+  onFinish: (result?: { imageDataUrl?: string }) => void;
 };
 
 const modeCopy: Record<Mode, { label: string; caption: string; description: string }> = {
@@ -34,21 +34,29 @@ const modeCopy: Record<Mode, { label: string; caption: string; description: stri
   review: { label: "Review", caption: "최종 검토", description: "완성된 레이어를 확인하고, 게시하기 전에 직접 다듬을 수 있어요." },
 };
 
-const taskSteps = [
-  { label: "사진 분석", detail: "업로드한 장면 30장 분류" },
-  { label: "핵심 피사체 추출", detail: "카드에 쓸 인물과 음식 분리" },
-  { label: "캐러셀 레이아웃", detail: "7장의 정보 흐름 구성" },
-  { label: "타이포그래피", detail: "브랜드 톤에 맞는 문장 배치" },
-  { label: "렌더링 준비", detail: "1080 × 1350 px로 export" },
-];
+type PlanStep = {
+  id: string;
+  label: string;
+  detail?: string;
+  status?: "pending" | "active" | "complete" | "blocked";
+};
+
+type AgentLogEntry = {
+  id: string;
+  kind: "reasoning" | "tool" | "status";
+  label: string;
+  detail?: string;
+};
+
+const planningStep: PlanStep = {
+  id: "planning",
+  label: "편집 계획 수립",
+  detail: "에이전트가 작업 순서를 정하고 있어요.",
+  status: "active",
+};
 
 function childText(text: string, className = "") {
   return h("span", { class: className }, text);
-}
-
-function progressState(progress: number, index: number) {
-  const threshold = [12, 34, 58, 78, 94][index];
-  return progress >= threshold + 18 ? "complete" : progress >= threshold ? "active" : "pending";
 }
 
 const VueEditorPlane = defineComponent({
@@ -64,13 +72,18 @@ const VueEditorPlane = defineComponent({
     ideaAssets: { type: Array, required: true },
     task: { type: String, required: true },
     brandText: { type: String, required: true },
-    assetNames: { type: Array, required: true },
+    assetItems: { type: Array, required: true },
     onBack: { type: Function, required: true },
     onFinish: { type: Function, required: true },
   },
   setup(props: Props) {
     const mode = ref<Mode>("auto");
-    const progress = ref(46);
+    const progress = ref(0);
+    const planSteps = ref<PlanStep[]>([planningStep]);
+    const currentReasoning = ref("에이전트가 작업 순서를 준비하고 있어요.");
+    const recentTool = ref("호출 대기 중");
+    const agentEventLog = ref<AgentLogEntry[]>([]);
+    const streamedAgentText = ref("");
     const selectedLayer = ref("headline");
     const activeTool = ref<Tool>("SELECT");
     const editor = createEditor({
@@ -80,11 +93,32 @@ const VueEditorPlane = defineComponent({
     const agentConnected = ref(false);
     const agentError = ref("");
     const agentSessionId = ref<string | null>(null);
+    const agentTraceId = ref<string | null>(null);
     let agentStream: EventSource | undefined;
+    const exportedImage = ref<string | null>(null);
+
+    function pushAgentEvent(kind: AgentLogEntry["kind"], label: string, detail?: string) {
+      agentEventLog.value = [{
+        id: `${Date.now()}-${agentEventLog.value.length}`,
+        kind,
+        label,
+        detail,
+      }, ...agentEventLog.value].slice(0, 50);
+    }
+
+    function readableToolDetail(value: unknown) {
+      if (value === undefined || value === null) return undefined;
+      if (typeof value === "string") return value;
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    }
 
     const browserToolDefs = new Map<string, ToolDef>([
       ...CORE_TOOLS,
-      ...ALL_TOOLS.filter((definition) => definition.name === "export_image"),
+      ...ALL_TOOLS.filter((definition) => definition.name === "set_image_fill" || definition.name === "export_image"),
     ].map((definition) => [definition.name, definition]));
 
     // Seed a real OpenPencil document. The editor agent can replace this graph
@@ -145,22 +179,55 @@ const VueEditorPlane = defineComponent({
       .map((id) => figma.getNodeById(id))
       .filter((node): node is NonNullable<typeof node> => node !== null);
 
+    async function hydrateUserAssets() {
+      const definition = browserToolDefs.get("set_image_fill");
+      if (!definition) return;
+      const targets = [layerIds.mainPhoto, layerIds.secondaryPhoto];
+      for (const [index, asset] of props.assetItems.entries()) {
+        const target = targets[index % targets.length];
+        const imageData = asset.dataUrl.includes(",") ? asset.dataUrl.slice(asset.dataUrl.indexOf(",") + 1) : asset.dataUrl;
+        if (!target || !imageData) continue;
+        try {
+          await definition.execute(figma, { id: target, image_data: imageData, scale_mode: "FILL" });
+        } catch (error) {
+          pushAgentEvent("status", `${asset.name} 이미지 주입 실패`, error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+
     async function postBridgeResponse(requestId: string, payload: Record<string, unknown>) {
       const sessionId = agentSessionId.value;
       if (!sessionId) return;
-      await fetch(`/api/editor-bridge/${sessionId}/response`, {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10_000);
+      const response = await fetch(`/api/editor-bridge/${sessionId}/response`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId, ...payload }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeout);
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Editor bridge response failed (${response.status})${detail ? `: ${detail}` : ""}`);
+      }
     }
 
     async function executeAgentTool(event: MessageEvent<string>) {
-      const request = JSON.parse(event.data) as {
+      const payload = JSON.parse(event.data) as {
+        request?: {
+          requestId: string;
+          toolName: string;
+          args: Record<string, unknown>;
+        };
         requestId: string;
         toolName: string;
         args: Record<string, unknown>;
       };
+      // The bridge SSE envelope is { type: "tool_call", request: ... }.
+      // Accepting the unwrapped shape as a fallback keeps this adapter
+      // compatible with direct OpenPencil transports too.
+      const request = payload.request ?? payload;
 
       if (mode.value === "review") {
         await postBridgeResponse(request.requestId, { error: "Editor is in review mode" });
@@ -178,25 +245,59 @@ const VueEditorPlane = defineComponent({
         // FigmaAPI pointed at the same renderer makes export_image verify the
         // exact graph the user sees.
         if (editor.renderer) figma.setRenderer(editor.renderer);
-        const result = await definition.execute(figma, request.args);
-        progress.value = Math.min(96, progress.value + 4);
-        await postBridgeResponse(request.requestId, {
-          result,
-          graphRevision: String(Date.now()),
-        });
+        const rawResult = request.toolName === "get_selection"
+          ? {
+              selection: figma.currentPage.selection.map((node) => ({
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                x: node.x,
+                y: node.y,
+                width: node.width,
+                height: node.height,
+              })),
+            }
+          : await definition.execute(figma, request.toolName === "get_node" && request.args.depth === undefined
+            ? { ...request.args, depth: 0 }
+            : request.args);
+        // Selection snapshots can contain full paint/text trees. Keep the
+        // bridge response compact so the model can continue without waiting
+        // on a huge JSON payload.
+        const result = request.toolName === "get_selection" && rawResult && typeof rawResult === "object"
+          ? {
+              ...(rawResult as Record<string, unknown>),
+              selection: Array.isArray((rawResult as { selection?: unknown }).selection)
+                ? ((rawResult as { selection: Record<string, unknown>[] }).selection).map((node) => ({
+                    id: node.id,
+                    name: node.name,
+                    type: node.type,
+                    x: node.x,
+                    y: node.y,
+                    width: node.width,
+                    height: node.height,
+                  }))
+                : (rawResult as Record<string, unknown>).selection,
+            }
+          : rawResult;
+        await postBridgeResponse(request.requestId, { result, graphRevision: String(Date.now()) });
       } catch (error) {
-        await postBridgeResponse(request.requestId, {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          await postBridgeResponse(request.requestId, { error: message });
+        } catch (responseError) {
+          agentError.value = responseError instanceof Error ? responseError.message : String(responseError);
+          pushAgentEvent("status", "OpenPencil tool response 실패", agentError.value);
+        }
       }
     }
 
     async function startAgent() {
       const browserContextId = crypto.randomUUID();
-      const response = await fetch(`/api/projects/${browserContextId}/editor/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      try {
+        const response = await fetch(`/api/projects/${browserContextId}/editor/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
           task: {
             id: browserContextId,
             request: props.task,
@@ -216,10 +317,12 @@ const VueEditorPlane = defineComponent({
           },
           assets: {
             assetSetId: browserContextId,
-            items: props.assetNames.map((name, index) => ({
+            items: props.assetItems.map((asset, index) => ({
               assetId: `${browserContextId}-asset-${index + 1}`,
               kind: "image",
-              name,
+              name: asset.name,
+              url: asset.dataUrl,
+              nodeId: [layerIds.mainPhoto, layerIds.secondaryPhoto][index % 2],
             })),
           },
           openPencil: {
@@ -237,36 +340,144 @@ const VueEditorPlane = defineComponent({
             ].filter(Boolean),
           },
           marketerContext: { source: "BMT idea card", ideaId: props.ideaId },
-        }),
-      });
+          }),
+        });
 
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        agentError.value = payload?.error ?? "Editor agent를 시작하지 못했어요";
-        return;
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(payload?.error ?? "Editor agent를 시작하지 못했어요");
+        }
+
+        const payload = await response.json() as { bridgeSessionId: string; traceId?: string };
+        agentSessionId.value = payload.bridgeSessionId;
+        agentTraceId.value = payload.traceId ?? null;
+        agentStream = new EventSource(`/api/editor-bridge/${payload.bridgeSessionId}/stream`);
+        agentStream.addEventListener("ready", () => {
+          agentConnected.value = true;
+        });
+        agentStream.addEventListener("tool_call", executeAgentTool as unknown as EventListener);
+        agentStream.addEventListener("agent_event", (event) => {
+          const detail = JSON.parse((event as MessageEvent<string>).data) as {
+            event?: {
+              type?: string;
+              status?: string;
+              message?: string;
+              traceId?: string;
+              text?: string;
+              toolName?: string;
+              stepId?: string;
+              stepIndex?: number;
+              totalSteps?: number;
+              percent?: number;
+              steps?: PlanStep[];
+              args?: Record<string, unknown>;
+              result?: unknown;
+              error?: string;
+              output?: {
+                status?: "completed" | "needs_input" | "failed";
+                summary?: string;
+                warnings?: string[];
+                unresolved?: string[];
+              };
+            };
+          };
+          const agentEvent = detail.event;
+          if (agentEvent?.traceId) agentTraceId.value = agentEvent.traceId;
+
+          if (agentEvent?.type === "plan" && agentEvent.steps?.length) {
+            planSteps.value = agentEvent.steps.map((step) => ({ ...step, status: "pending" }));
+            currentReasoning.value = "에이전트가 편집 계획을 세웠어요.";
+            pushAgentEvent("reasoning", currentReasoning.value, `${agentEvent.steps.length}개 단계`);
+          }
+          if (agentEvent?.type === "progress" && agentEvent.stepId && typeof agentEvent.percent === "number") {
+            progress.value = Math.max(0, Math.min(100, agentEvent.percent));
+            planSteps.value = planSteps.value.map((step, index) => {
+              if (step.id === agentEvent.stepId) {
+                return {
+                  ...step,
+                  status: agentEvent.status === "blocked" ? "blocked" : agentEvent.status === "completed" ? "complete" : "active",
+                };
+              }
+              if (agentEvent.status === "started" && typeof agentEvent.stepIndex === "number" && index < agentEvent.stepIndex) {
+                return { ...step, status: "complete" };
+              }
+              return step;
+            });
+            if (agentEvent.message) {
+              currentReasoning.value = agentEvent.message;
+              pushAgentEvent("reasoning", agentEvent.message, `진행률 ${agentEvent.percent}%`);
+            }
+          }
+          if (agentEvent?.type === "assistant_delta" && agentEvent.text) {
+            streamedAgentText.value = `${streamedAgentText.value}${agentEvent.text}`.slice(-20000);
+          }
+          if (agentEvent?.type === "reasoning_update" && agentEvent.message) {
+            currentReasoning.value = agentEvent.message;
+            pushAgentEvent("reasoning", agentEvent.message);
+          }
+          if (agentEvent?.type === "tool_started") {
+            const toolName = agentEvent.toolName ?? "OpenPencil";
+            recentTool.value = `${toolName} 실행 중`;
+            pushAgentEvent("tool", toolName, readableToolDetail(agentEvent.args) ?? "실행 시작");
+          }
+          if (agentEvent?.type === "tool_finished") {
+            const toolName = agentEvent.toolName ?? "OpenPencil";
+            recentTool.value = `${toolName} 완료`;
+            pushAgentEvent("tool", toolName, readableToolDetail(agentEvent.result) ?? "실행 완료");
+            const result = agentEvent.result as { base64?: string; mimeType?: string } | undefined;
+            if (toolName === "export_image" && result?.base64) exportedImage.value = `data:${result.mimeType ?? "image/png"};base64,${result.base64}`;
+          }
+          if (agentEvent?.type === "tool_failed") {
+            const toolName = agentEvent.toolName ?? "OpenPencil";
+            recentTool.value = `${toolName} 실패`;
+            currentReasoning.value = agentEvent.error ?? `${toolName} 실행에 실패했어요.`;
+            pushAgentEvent("status", toolName, agentEvent.error ?? "실행 실패");
+          }
+          if (agentEvent?.type === "status" && agentEvent.message && agentEvent.status !== "completed" && agentEvent.status !== "failed") {
+            currentReasoning.value = agentEvent.message;
+            pushAgentEvent("status", agentEvent.message, agentEvent.status);
+          }
+          if (agentEvent?.type === "status" && agentEvent.status === "completed" && agentEvent.output?.status === "completed") {
+            progress.value = 100;
+            planSteps.value = planSteps.value.map((step) => ({ ...step, status: "complete" }));
+            currentReasoning.value = "편집 작업이 완료됐어요.";
+            pushAgentEvent("status", currentReasoning.value, "completed");
+          }
+          if (agentEvent?.type === "status" && agentEvent.status === "needs_input") {
+            const unresolved = agentEvent.output?.unresolved?.filter(Boolean).join(" · ");
+            currentReasoning.value = unresolved || agentEvent.message || "추가 입력이나 편집 tool이 필요해요.";
+            recentTool.value = "작업 보류";
+            agentError.value = currentReasoning.value;
+            planSteps.value = planSteps.value.map((step) => step.status === "active" ? { ...step, status: "blocked" } : step);
+            pushAgentEvent("status", "추가 입력 필요", currentReasoning.value);
+          }
+          if (agentEvent?.type === "status" && agentEvent.status === "failed") {
+            currentReasoning.value = agentEvent.message ?? "Editor agent 작업이 실패했어요";
+            pushAgentEvent("status", currentReasoning.value, "failed");
+            agentError.value = currentReasoning.value;
+          }
+        });
+        agentStream.addEventListener("error", (event) => {
+          agentConnected.value = false;
+          const serverMessage = event instanceof MessageEvent && typeof event.data === "string"
+            ? (() => {
+                try {
+                  const parsed = JSON.parse(event.data) as { message?: string };
+                  return parsed.message;
+                } catch {
+                  return undefined;
+                }
+              })()
+            : undefined;
+          agentError.value = serverMessage ?? "Editor bridge 연결이 끊겼어요. 서버가 실행 중인지 확인해주세요.";
+          if (serverMessage) pushAgentEvent("status", "Editor agent 실패", serverMessage);
+        });
+      } catch (error) {
+        agentConnected.value = false;
+        agentError.value = error instanceof Error && error.message
+          ? error.message
+          : "Editor agent에 연결하지 못했어요. 서버가 실행 중인지 확인해주세요.";
       }
-
-      const payload = await response.json() as { bridgeSessionId: string };
-      agentSessionId.value = payload.bridgeSessionId;
-      agentConnected.value = true;
-      agentStream = new EventSource(`/api/editor-bridge/${payload.bridgeSessionId}/stream`);
-      agentStream.addEventListener("tool_call", executeAgentTool as unknown as EventListener);
-      agentStream.addEventListener("agent_event", (event) => {
-        const detail = JSON.parse((event as MessageEvent<string>).data) as { event?: { type?: string; status?: string; message?: string } };
-        const agentEvent = detail.event;
-        if (agentEvent?.type === "tool_started") {
-          progress.value = Math.min(94, progress.value + 2);
-        }
-        if (agentEvent?.type === "status" && agentEvent.status === "completed") {
-          progress.value = 100;
-        }
-        if (agentEvent?.type === "status" && agentEvent.status === "failed") {
-          agentError.value = agentEvent.message ?? "Editor agent 작업이 실패했어요";
-        }
-      });
-      agentStream.addEventListener("error", () => {
-        agentError.value = "Editor bridge 연결이 끊겼어요";
-      });
     }
 
     provideEditor(editor);
@@ -304,27 +515,35 @@ const VueEditorPlane = defineComponent({
         });
       },
     });
-    const currentTask = computed(() => taskSteps.findIndex((_, index) => progressState(progress.value, index) === "active"));
+    const currentTask = computed(() => planSteps.value.findIndex((step) => step.status === "active"));
     const isComplete = computed(() => progress.value >= 100);
     const availableModes = computed<Mode[]>(() => (isComplete.value ? ["auto", "review"] : ["auto", "live"]));
-    let timer: ReturnType<typeof setInterval> | undefined;
-
     watch(isComplete, (complete) => {
       if (complete && mode.value === "live") mode.value = "review";
     });
 
-    onMounted(() => {
+    async function finishToReview() {
+      if (!exportedImage.value) {
+        const definition = browserToolDefs.get("export_image");
+        if (definition) {
+          try {
+            if (editor.renderer) figma.setRenderer(editor.renderer);
+            const result = await definition.execute(figma, { format: "PNG", scale: 1 }) as { base64?: string; mimeType?: string };
+            if (result.base64) exportedImage.value = `data:${result.mimeType ?? "image/png"};base64,${result.base64}`;
+          } catch (error) {
+            agentError.value = error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+      props.onFinish({ imageDataUrl: exportedImage.value ?? undefined });
+    }
+
+    onMounted(async () => {
+      await hydrateUserAssets();
       void startAgent();
-      timer = setInterval(() => {
-        // Keep the visual MVP progress fallback only when no server agent is
-        // configured. A connected agent advances progress from real tool calls.
-        if (agentConnected.value || progress.value >= 100) return;
-        progress.value = Math.min(100, progress.value + 2);
-      }, 900);
     });
 
     onBeforeUnmount(() => {
-      if (timer) clearInterval(timer);
       agentStream?.close();
     });
 
@@ -337,6 +556,15 @@ const VueEditorPlane = defineComponent({
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: nextMode }),
+        }).then(async (response) => {
+          if (response.ok) return;
+          const payload = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(payload?.error ?? `Editor mode 변경 실패 (${response.status})`);
+        }).catch((error) => {
+          agentConnected.value = false;
+          agentError.value = error instanceof Error && error.message
+            ? error.message
+            : "Editor bridge에 연결하지 못했어요. 서버가 실행 중인지 확인해주세요.";
         });
       }
     }
@@ -414,12 +642,44 @@ const VueEditorPlane = defineComponent({
     }
 
     function progressList() {
-      return h("div", { class: "vue-task-list" }, taskSteps.map((task, index) => h("div", {
-        class: ["vue-task-row", progressState(progress.value, index)],
-      }, [
-        h("span", { class: "vue-task-mark" }, progressState(progress.value, index) === "complete" ? "✓" : progressState(progress.value, index) === "active" ? "●" : "○"),
-        h("span", { class: "vue-task-copy" }, [h("strong", null, task.label), h("small", null, task.detail)]),
-      ])));
+      const steps = planSteps.value.length ? planSteps.value : [planningStep];
+      return h("div", { class: "vue-task-list" }, steps.map((step) => {
+        const status = step.status ?? "pending";
+        return h("div", {
+          class: ["vue-task-row", status],
+        }, [
+          h("span", { class: "vue-task-mark" }, status === "complete" ? "✓" : status === "active" ? "●" : status === "blocked" ? "!" : "○"),
+          h("span", { class: "vue-task-copy" }, [h("strong", null, step.label), h("small", null, step.detail ?? "에이전트가 다음 작업을 준비하고 있어요.")]),
+        ]);
+      }));
+    }
+
+    function agentStreamView() {
+      const currentStep = planSteps.value.find((step) => step.status === "active");
+      return h("div", { class: "vue-agent-stream" }, [
+        h("div", { class: "vue-agent-stream-heading" }, [
+          h("div", { class: "vue-inspector-label" }, "AGENT STREAM"),
+          agentTraceId.value ? h("small", { title: agentTraceId.value }, `TRACE ${agentTraceId.value.slice(-10)}`) : null,
+        ]),
+        h("div", { class: "vue-agent-run-summary" }, [
+          h("div", { class: "vue-agent-run-row" }, [
+            h("span", { class: "vue-agent-run-icon" }, "✦"),
+            h("div", null, [h("span", { class: "vue-agent-run-label" }, "CURRENT REASONING"), h("strong", { class: "vue-agent-stream-current" }, currentReasoning.value || currentStep?.detail || "에이전트가 작업 순서를 준비하고 있어요.")]),
+          ]),
+          h("div", { class: "vue-agent-run-row" }, [
+            h("span", { class: "vue-agent-run-icon" }, "⌁"),
+            h("div", null, [h("span", { class: "vue-agent-run-label" }, "MOST RECENT TOOL"), h("strong", null, recentTool.value)]),
+          ]),
+        ]),
+        h("details", { class: "vue-agent-event-details" }, [
+          h("summary", null, [h("span", null, "전체 reasoning · tool 로그"), h("small", null, `${agentEventLog.value.length} events`)]),
+          h("div", { class: "vue-agent-event-log" }, (agentEventLog.value.length ? agentEventLog.value : [{ id: "waiting", kind: "status" as const, label: "계획 수립 대기 중" }]).map((entry) => h("div", { class: ["vue-agent-event-row", entry.kind], key: entry.id }, [
+            h("span", null, entry.kind === "tool" ? "TOOL" : entry.kind === "reasoning" ? "REASONING" : "STATUS"),
+            h("p", null, [h("strong", null, entry.label), entry.detail ? h("small", null, entry.detail) : null]),
+          ]))),
+          streamedAgentText.value ? h("div", { class: "vue-agent-output-details" }, [h("div", { class: "vue-agent-run-label" }, "MODEL OUTPUT STREAM"), h("pre", null, streamedAgentText.value)]) : null,
+        ]),
+      ]);
     }
 
     function autoView() {
@@ -433,6 +693,7 @@ const VueEditorPlane = defineComponent({
           h("div", { class: "vue-progress-track" }, [h("span", { style: { width: `${progress.value}%` } })]),
         ]),
         progressList(),
+        agentStreamView(),
         h("div", { class: "vue-auto-note" }, [h("span", null, "◎"), h("p", null, isComplete.value ? "모든 편집 작업이 끝났어요. 결과를 검토해주세요." : "편집 plane은 접혀 있어요. 작업은 계속 진행됩니다."), h("button", { onClick: () => setMode(isComplete.value ? "review" : "live") }, isComplete.value ? "Review 열기 →" : "실시간 편집 보기 →")]),
       ]);
     }
@@ -442,11 +703,12 @@ const VueEditorPlane = defineComponent({
         canvas(),
         h("aside", { class: "vue-editor-inspector" }, [
           h("div", { class: "vue-inspector-heading" }, [h("span", { class: "vue-kicker" }, "LIVE EDITING"), h("strong", null, isComplete.value ? "완료" : "작업 중")]),
-          h("div", { class: "vue-live-task" }, [h("span", { class: "vue-pulse" }), h("span", null, isComplete.value ? "최종 렌더링을 확인하세요" : `${taskSteps[currentTask.value < 0 ? 0 : currentTask.value]?.label ?? "레이아웃"}을 진행하고 있어요`)]),
+          h("div", { class: "vue-live-task" }, [h("span", { class: "vue-pulse" }), h("span", null, isComplete.value ? "최종 렌더링을 확인하세요" : `${planSteps.value[currentTask.value < 0 ? 0 : currentTask.value]?.label ?? "편집 계획"}을 진행하고 있어요`)]),
           h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "에이전트 작업 중 · 캔버스 읽기 전용")]),
+          agentStreamView(),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "LAYERS"), layerRow("headline", "headline / text", "text"), layerRow("main-photo", "main photo / crop", "image"), layerRow("route-map", "route map / image", "image"), layerRow("sticker", "spark / sticker", "shape")]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "ASSETS IN USE"), h("div", { class: "vue-asset-chips" }, (props.ideaAssets as string[]).map((asset) => h("span", { class: "vue-asset-chip" }, asset)))]),
-          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "OpenPencil tools connected" : agentError.value || "Agent 준비 중"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
+          h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "OpenPencil tools connected" : agentError.value || "Agent 준비 중"), agentTraceId.value ? h("small", { title: agentTraceId.value }, `trace ${agentTraceId.value.slice(-10)}`) : null, h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
         ]),
       ]);
     }
@@ -480,7 +742,7 @@ const VueEditorPlane = defineComponent({
             h("div", null, [h("span", null, "✓"), h("p", null, [h("strong", null, "출력 규격"), h("small", null, "인스타그램 캐러셀 1080 × 1350")])]),
           ]),
           reviewControls(),
-          h("button", { class: "vue-finish-button", disabled: !isComplete.value, onClick: () => (props.onFinish as () => void)() }, isComplete.value ? "게시물 검토로 이동 →" : "편집 완료를 기다리는 중"),
+          h("button", { class: "vue-finish-button", disabled: !isComplete.value, onClick: () => void finishToReview() }, isComplete.value ? "게시물 검토로 이동 →" : "편집 완료를 기다리는 중"),
           h("button", { class: "vue-secondary-link", onClick: () => setMode("auto") }, "← 진행상황으로 돌아가기"),
         ]),
       ]);

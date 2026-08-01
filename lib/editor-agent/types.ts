@@ -113,14 +113,35 @@ export interface OpenPencilBridge {
 }
 
 export type EditorAgentEvent =
+  | {
+      type: "plan";
+      steps: Array<{
+        id: string;
+        label: string;
+        detail?: string;
+      }>;
+    }
+  | {
+      type: "progress";
+      stepId: string;
+      stepIndex: number;
+      totalSteps: number;
+      status: "started" | "completed" | "blocked";
+      percent: number;
+      message?: string;
+    }
+  | { type: "assistant_delta"; text: string }
+  | { type: "reasoning_update"; message: string }
   | { type: "tool_started"; toolName: string; args: Record<string, unknown> }
   | { type: "tool_finished"; toolName: string; result: unknown; graphRevision?: string }
   | { type: "tool_failed"; toolName: string; error: string }
   | {
       type: "status";
-      status: EditorAgentMode | "completed" | "failed";
+      status: EditorAgentMode | "completed" | "needs_input" | "failed";
       message: string;
       output?: EditorAgentResult;
+      runId?: string;
+      traceId?: string;
     };
 
 export type EditorAgentRunContext = {

@@ -17,4 +17,5 @@ export type RenderedPost = {
   ideaId: string;
   slides: { eyebrow: string; title: string; copy: string; gradient: string }[];
   caption: string;
+  previewImageUrl?: string;
 };

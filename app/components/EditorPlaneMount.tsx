@@ -7,9 +7,9 @@ type Props = {
   idea: Idea;
   task: string;
   brandText: string;
-  assetNames: string[];
+  assetItems: { name: string; dataUrl: string }[];
   onBack: () => void;
-  onFinish: () => void;
+  onFinish: (result?: { imageDataUrl?: string }) => void;
 };
 
 /**
@@ -19,7 +19,7 @@ type Props = {
  * does not need to know anything about Vue. The real OpenPencil runtime can
  * replace VueEditorPlane without changing this host contract.
  */
-export default function EditorPlaneMount({ idea, task, brandText, assetNames, onBack, onFinish }: Props) {
+export default function EditorPlaneMount({ idea, task, brandText, assetItems, onBack, onFinish }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const callbacksRef = useRef({ onBack, onFinish });
   callbacksRef.current = { onBack, onFinish };
@@ -42,9 +42,9 @@ export default function EditorPlaneMount({ idea, task, brandText, assetNames, on
         ideaAssets: idea.assets,
         task,
         brandText,
-        assetNames,
+        assetItems,
         onBack: () => callbacksRef.current.onBack(),
-        onFinish: () => callbacksRef.current.onFinish(),
+        onFinish: (result?: { imageDataUrl?: string }) => callbacksRef.current.onFinish(result),
       });
       vueApp.mount(mountRef.current);
     });
@@ -53,7 +53,7 @@ export default function EditorPlaneMount({ idea, task, brandText, assetNames, on
       disposed = true;
       vueApp?.unmount();
     };
-  }, [assetNames, brandText, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, task]);
+  }, [assetItems, brandText, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, task]);
 
   return <div ref={mountRef} className="vue-editor-mount" aria-label="BMT editor plane" />;
 }

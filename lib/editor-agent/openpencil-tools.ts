@@ -14,6 +14,82 @@ import type {
 } from "./types";
 
 const EXPORT_IMAGE_TOOL_NAME = "export_image";
+const SET_IMAGE_FILL_TOOL_NAME = "set_image_fill";
+
+const progressArgsSchema = z.object({
+  phase: z.enum(["plan", "step_started", "step_completed", "blocked", "workflow_completed"]),
+  stepId: z.string().min(1),
+  stepIndex: z.number().int().nonnegative(),
+  totalSteps: z.number().int().positive(),
+  percent: z.number().int().min(0).max(100),
+  message: z.string().min(1),
+  steps: z.array(z.object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    detail: z.string().optional(),
+  })).optional(),
+}).strict();
+
+type ProgressArgs = z.infer<typeof progressArgsSchema>;
+
+/**
+ * This is an orchestration tool rather than an OpenPencil document tool. It
+ * lets the agent publish an explicit plan and truthful checkpoints to the
+ * product UI while keeping the canonical editor tools unchanged.
+ */
+export function createProgressReportTool() {
+  return tool({
+    name: "report_progress",
+    description: "Report the editor plan and the current completed or blocked step. Call this before editing, after each meaningful step, and when the workflow completes.",
+    parameters: progressArgsSchema,
+    strict: true,
+    execute: async (
+      args: ProgressArgs,
+      context?: RunContext<EditorAgentRunContext>,
+    ) => {
+      const runContext = getRunContext(context);
+      runContext.onEvent?.({ type: "tool_started", toolName: "report_progress", args });
+
+      if (args.phase === "plan" && args.steps?.length) {
+        runContext.onEvent?.({
+          type: "plan",
+          steps: args.steps,
+        });
+      }
+
+      const status = args.phase === "step_completed" || args.phase === "workflow_completed"
+        ? "completed"
+        : args.phase === "blocked"
+          ? "blocked"
+          : "started";
+
+      runContext.onEvent?.({
+        type: "progress",
+        stepId: args.stepId,
+        stepIndex: args.stepIndex,
+        totalSteps: args.totalSteps,
+        status,
+        percent: args.percent,
+        message: args.message,
+      });
+
+      const result = {
+        ok: true,
+        acknowledged: true,
+        phase: args.phase,
+        stepId: args.stepId,
+        percent: args.percent,
+      };
+      runContext.onEvent?.({
+        type: "tool_finished",
+        toolName: "report_progress",
+        result,
+        graphRevision: runContext.graphRevision,
+      });
+      return result;
+    },
+  });
+}
 
 /**
  * Convert OpenPencil's canonical parameter description into a strict Zod
@@ -60,17 +136,19 @@ export function openPencilParamsToZod(
 
 /**
  * OpenPencil owns the tool definitions. This function only selects the
- * canonical definitions to expose to the editor agent. `export_image` is
- * added because visual verification is part of the editor loop.
+ * canonical definitions to expose to the editor agent. Image fill and export
+ * are extended OpenPencil tools required by the editor workflow.
  */
 export function getOpenPencilToolDefs(options?: {
   includeUnsafe?: boolean;
 }): ToolDef[] {
   const core = [...CORE_TOOLS];
   const exportImage = ALL_TOOLS.find((candidate) => candidate.name === EXPORT_IMAGE_TOOL_NAME);
-  const defs = exportImage && !core.some((candidate) => candidate.name === exportImage.name)
-    ? [...core, exportImage]
-    : core;
+  const setImageFill = ALL_TOOLS.find((candidate) => candidate.name === SET_IMAGE_FILL_TOOL_NAME);
+  const defs = [...core];
+  for (const definition of [setImageFill, exportImage]) {
+    if (definition && !defs.some((candidate) => candidate.name === definition.name)) defs.push(definition);
+  }
 
   // CORE_TOOLS remains the default surface, including OpenPencil's canonical
   // `eval` definition. Deployments that do not want arbitrary code execution
@@ -186,7 +264,7 @@ export function createOpenPencilAgentTools(options?: {
   const definitions = options?.toolDefs ?? getOpenPencilToolDefs({
     includeUnsafe: options?.includeUnsafe,
   });
-  return definitions.map(openPencilToolToAgentTool);
+  return [createProgressReportTool(), ...definitions.map(openPencilToolToAgentTool)];
 }
 
 /** Execute canonical OpenPencil tools directly against a browser-owned FigmaAPI. */
