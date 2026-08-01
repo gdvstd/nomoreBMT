@@ -1,0 +1,292 @@
+export type ReferenceFormat =
+  | "carousel"
+  | "reel"
+  | "single_image"
+  | "unknown";
+
+export type ReferenceScoutInput = {
+  topic: string;
+  objective: string;
+  timeRange: "7d" | "30d" | "90d" | "any";
+  region: string;
+  formatFocus: "carousel" | "reel" | "single_image" | "all";
+  maxReferences: number;
+};
+
+export type ReferenceScoutModelOutput = {
+  query: {
+    topic: string;
+    objective: string;
+    timeRange: ReferenceScoutInput["timeRange"];
+    region: string;
+    formatFocus: ReferenceScoutInput["formatFocus"];
+  };
+  searchSummary: {
+    queries: string[];
+    verifiedReferenceCount: number;
+    confidence: "low" | "medium" | "high";
+    limitations: string[];
+  };
+  references: Array<{
+    rank: number;
+    instagramUrl: string;
+    creatorHandle: string | null;
+    format: ReferenceFormat;
+    publishedAt: string | null;
+    topicSummary: string;
+    observedMetrics: {
+      likes: number | null;
+      comments: number | null;
+      views: number | null;
+      saves: number | null;
+      shares: number | null;
+    };
+    performanceSignal: "unknown" | "low" | "medium" | "high" | "viral";
+    metricCaveat: string;
+    match: {
+      topicSimilarity: number;
+      audienceSimilarity: number;
+      formatSimilarity: number;
+      rationale: string;
+    };
+    creativeAnalysis: {
+      hook: string;
+      contentStructure: string[];
+      visualPatterns: string[];
+      engagementMechanisms: string[];
+      transferableElements: string[];
+      avoidCopying: string[];
+    };
+    visualEvidenceScope:
+      | "full_post"
+      | "public_preview"
+      | "text_only"
+      | "unavailable";
+    sourceUrls: string[];
+    confidence: number;
+  }>;
+  patterns: Array<{
+    pattern: string;
+    whyItMayWork: string;
+    evidenceReferenceUrls: string[];
+    confidence: number;
+  }>;
+  editorContext: {
+    adoptionIdeas: string[];
+    visualDirections: string[];
+    hookDirections: string[];
+    avoid: string[];
+    evidenceRules: string[];
+  };
+};
+
+export type InstagramReferenceContext = ReferenceScoutModelOutput & {
+  schemaVersion: "1.0";
+  generatedAt: string;
+  sources: string[];
+};
+
+const stringArray = (maxItems: number) => ({
+  type: "array",
+  items: { type: "string" },
+  maxItems,
+});
+
+const nullableNumber = {
+  type: ["number", "null"],
+  minimum: 0,
+};
+
+export const referenceScoutJsonSchema = {
+  type: "object",
+  properties: {
+    query: {
+      type: "object",
+      properties: {
+        topic: { type: "string" },
+        objective: { type: "string" },
+        timeRange: { type: "string", enum: ["7d", "30d", "90d", "any"] },
+        region: { type: "string" },
+        formatFocus: {
+          type: "string",
+          enum: ["carousel", "reel", "single_image", "all"],
+        },
+      },
+      required: ["topic", "objective", "timeRange", "region", "formatFocus"],
+      additionalProperties: false,
+    },
+    searchSummary: {
+      type: "object",
+      properties: {
+        queries: stringArray(8),
+        verifiedReferenceCount: { type: "integer", minimum: 0, maximum: 8 },
+        confidence: { type: "string", enum: ["low", "medium", "high"] },
+        limitations: stringArray(12),
+      },
+      required: [
+        "queries",
+        "verifiedReferenceCount",
+        "confidence",
+        "limitations",
+      ],
+      additionalProperties: false,
+    },
+    references: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          rank: { type: "integer", minimum: 1, maximum: 8 },
+          instagramUrl: { type: "string" },
+          creatorHandle: { type: ["string", "null"] },
+          format: {
+            type: "string",
+            enum: ["carousel", "reel", "single_image", "unknown"],
+          },
+          publishedAt: { type: ["string", "null"] },
+          topicSummary: { type: "string" },
+          observedMetrics: {
+            type: "object",
+            properties: {
+              likes: nullableNumber,
+              comments: nullableNumber,
+              views: nullableNumber,
+              saves: nullableNumber,
+              shares: nullableNumber,
+            },
+            required: ["likes", "comments", "views", "saves", "shares"],
+            additionalProperties: false,
+          },
+          performanceSignal: {
+            type: "string",
+            enum: ["unknown", "low", "medium", "high", "viral"],
+          },
+          metricCaveat: { type: "string" },
+          match: {
+            type: "object",
+            properties: {
+              topicSimilarity: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+              },
+              audienceSimilarity: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+              },
+              formatSimilarity: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+              },
+              rationale: { type: "string" },
+            },
+            required: [
+              "topicSimilarity",
+              "audienceSimilarity",
+              "formatSimilarity",
+              "rationale",
+            ],
+            additionalProperties: false,
+          },
+          creativeAnalysis: {
+            type: "object",
+            properties: {
+              hook: { type: "string" },
+              contentStructure: stringArray(12),
+              visualPatterns: stringArray(12),
+              engagementMechanisms: stringArray(10),
+              transferableElements: stringArray(12),
+              avoidCopying: stringArray(10),
+            },
+            required: [
+              "hook",
+              "contentStructure",
+              "visualPatterns",
+              "engagementMechanisms",
+              "transferableElements",
+              "avoidCopying",
+            ],
+            additionalProperties: false,
+          },
+          visualEvidenceScope: {
+            type: "string",
+            enum: [
+              "full_post",
+              "public_preview",
+              "text_only",
+              "unavailable",
+            ],
+          },
+          sourceUrls: stringArray(12),
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: [
+          "rank",
+          "instagramUrl",
+          "creatorHandle",
+          "format",
+          "publishedAt",
+          "topicSummary",
+          "observedMetrics",
+          "performanceSignal",
+          "metricCaveat",
+          "match",
+          "creativeAnalysis",
+          "visualEvidenceScope",
+          "sourceUrls",
+          "confidence",
+        ],
+        additionalProperties: false,
+      },
+    },
+    patterns: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          pattern: { type: "string" },
+          whyItMayWork: { type: "string" },
+          evidenceReferenceUrls: stringArray(8),
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: [
+          "pattern",
+          "whyItMayWork",
+          "evidenceReferenceUrls",
+          "confidence",
+        ],
+        additionalProperties: false,
+      },
+    },
+    editorContext: {
+      type: "object",
+      properties: {
+        adoptionIdeas: stringArray(12),
+        visualDirections: stringArray(12),
+        hookDirections: stringArray(10),
+        avoid: stringArray(10),
+        evidenceRules: stringArray(10),
+      },
+      required: [
+        "adoptionIdeas",
+        "visualDirections",
+        "hookDirections",
+        "avoid",
+        "evidenceRules",
+      ],
+      additionalProperties: false,
+    },
+  },
+  required: [
+    "query",
+    "searchSummary",
+    "references",
+    "patterns",
+    "editorContext",
+  ],
+  additionalProperties: false,
+} as const;
