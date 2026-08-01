@@ -1195,12 +1195,12 @@ const VueEditorPlane = defineComponent({
         h(OpenPencilCanvas, { interactive: false }),
       ]),
       h("div", { class: "editor-plane-heading" }, [
-        h("div", null, [h("div", { class: "vue-kicker" }, "POST EDITOR / 04"), h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")]), h("p", null, `${props.ideaTitle} · ${props.ideaFormat}`)]),
-        h("div", { class: "editor-plane-actions" }, [h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),
+        h("div", null, [h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")])]),
       ]),
       modeTabs(),
       h("div", { class: "vue-mode-description" }, [h("span", null, modeCopy[mode.value].caption), h("p", null, modeCopy[mode.value].description)]),
       mode.value === "auto" ? autoView() : mode.value === "live" ? liveView() : reviewView(),
+      h("div", { class: "editor-plane-footer-actions" }, [h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),
     ]);
   },
 });

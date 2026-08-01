@@ -178,12 +178,13 @@ button { cursor: pointer; }
 /* Vue editor micro-frontend ------------------------------------------------ */
 .vue-editor-mount { width: 100%; }
 .editor-plane-shell { max-width: 1260px; margin: 0 auto; padding: 55px 58px 70px; }
-.editor-plane-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.editor-plane-heading { display: flex; align-items: flex-end; gap: 24px; }
 .editor-plane-heading h1 { margin: 17px 0 10px; font: 500 clamp(36px, 4vw, 54px)/.98 'Pretendard', sans-serif; letter-spacing: -.07em; }
 .editor-plane-heading h1 em { color: var(--coral); font-style: normal; }
 .editor-plane-heading p { margin: 0; color: #918980; font-size: 12px; }
 .vue-kicker { color: var(--coral); font: 500 9px 'DM Mono', monospace; letter-spacing: .12em; }
 .editor-plane-actions { display: flex; align-items: center; gap: 21px; padding-bottom: 7px; }
+.editor-plane-footer-actions { display: flex; justify-content: flex-start; margin-top: 24px; }
 .vue-agent-badge { color: #6f8177; font: 9px 'DM Mono', monospace; letter-spacing: .06em; }
 .vue-agent-badge i { color: #83a582; font-style: normal; margin-right: 6px; }
 .vue-back-link, .vue-secondary-link { border: 0; background: transparent; color: #8f867d; font-size: 10px; padding: 0; }
@@ -234,6 +235,31 @@ button { cursor: pointer; }
 .vue-editor-inspector, .vue-review-panel { min-height: 100%; border: 1px solid var(--line); background: var(--white); padding: 25px; }.vue-inspector-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 23px; }.vue-inspector-heading strong { color: #779273; font: 10px 'DM Mono'; }.vue-live-task { display: flex; gap: 9px; align-items: center; padding: 12px; color: #706960; background: #f5f1e9; font-size: 10px; line-height: 1.4; }.vue-live-lock-note { display: flex; align-items: center; gap: 7px; margin-top: 9px; color: #a79e95; font: 8px 'DM Mono'; }.vue-live-lock-note span:first-child { color: #c28c54; font-size: 14px; }.vue-pulse { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px #f9e6de; animation: vue-pulse 1.3s infinite; }.vue-inspector-section { margin-top: 25px; }.vue-inspector-label { margin-bottom: 10px; color: #a29a91; font: 8px 'DM Mono'; letter-spacing: .12em; }.vue-layer-row { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 11px 3px; background: transparent; text-align: left; color: #8e867d; }.vue-layer-row.selected { color: var(--ink); }.vue-layer-icon { display: grid; place-items: center; width: 21px; height: 21px; color: #837a70; background: #f0ece5; border-radius: 3px; font: 9px 'DM Mono'; }.vue-layer-row.selected .vue-layer-icon { color: var(--coral); background: #f9e4db; }.vue-layer-name { flex: 1; font-size: 10px; }.vue-layer-dots { color: #c1b8ae; font-size: 16px; }.vue-asset-chips { display: flex; flex-wrap: wrap; gap: 5px; }.vue-asset-chip { padding: 6px 7px; color: #937266; background: #f4e8e0; font: 8px 'DM Mono'; }.vue-live-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 28px; color: #aca39a; font: 8px 'DM Mono'; }.vue-live-foot button { border: 0; background: transparent; color: var(--coral); font-size: 10px; }
 .vue-layer-row:disabled { cursor: not-allowed; opacity: .58; }.vue-review-tools { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--line); }.vue-review-tool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }.vue-review-tool-grid button { min-height: 30px; border: 1px solid var(--line); background: #faf8f4; color: #756d65; font: 9px 'DM Mono'; }.vue-review-tool-grid button:hover { border-color: #d8a08a; color: var(--coral); background: #fff8f4; }.vue-review-tool-hint { margin: 10px 0 0; color: #aaa098; font-size: 9px; line-height: 1.5; }.vue-finish-button { width: 100%; margin-top: 29px; border: 0; padding: 14px 12px; background: var(--ink); color: var(--white); font-size: 10px; }.vue-finish-button:disabled { cursor: not-allowed; opacity: .35; }.vue-secondary-link { display: block; margin: 18px auto 0; }
 @keyframes vue-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+/* Keep the editor workflow aligned with the app's blue point color. */
+.editor-plane-shell .vue-mode-tabs { background: #edf4ff; }
+.editor-plane-shell .vue-live-orb { color: var(--coral); background: #edf4ff; box-shadow: 0 0 0 8px #f7faff; }
+.editor-plane-shell .vue-progress-track { background: #e8eef9; }
+.editor-plane-shell .vue-progress-track span { background: var(--coral); }
+.editor-plane-shell .vue-task-row.active .vue-task-mark { border-color: #b8d2ff; background: #edf4ff; color: var(--coral); }
+.editor-plane-shell .vue-auto-note { background: #f4f7fd; }
+.editor-plane-shell .vue-auto-note > span { color: var(--coral); }
+.editor-plane-shell .vue-live-task { background: #f4f7fd; }
+.editor-plane-shell .vue-live-lock-note span:first-child { color: var(--coral); }
+.editor-plane-shell .vue-pulse { box-shadow: 0 0 0 4px #e4efff; }
+.editor-plane-shell .vue-canvas-wrap { background: #f2f6fc; }
+.editor-plane-shell .vue-canvas-tool:hover:not(:disabled),
+.editor-plane-shell .vue-canvas-action:hover:not(:disabled),
+.editor-plane-shell .vue-canvas-tool.active { background: #e5efff; }
+.editor-plane-shell .vue-layer-icon { background: #f1f5fc; }
+.editor-plane-shell .vue-layer-row.selected .vue-layer-icon { background: #e9f1ff; }
+.editor-plane-shell .vue-asset-chip { color: #5d84c8; background: #eef4ff; }
+.editor-plane-shell .vue-review-tool-grid button { background: #f7faff; }
+.editor-plane-shell .vue-review-tool-grid button:hover { border-color: #9ec2ff; background: #f0f6ff; }
+.editor-plane-shell .vue-agent-run-row { background: #f7faff; }
+.editor-plane-shell .vue-agent-run-icon { background: #eaf2ff; }
+.editor-plane-shell .vue-agent-event-row { background: #f7faff; }
+.editor-plane-shell .vue-agent-event-row > span { color: #6e8dcc; }
 @media (max-width: 760px) { .editor-plane-shell { padding: 38px 20px 55px; }.editor-plane-heading { align-items: flex-start; flex-direction: column; }.editor-plane-actions { width: 100%; justify-content: space-between; }.vue-mode-tabs { margin-top: 31px; }.vue-mode-tab { flex-direction: column; gap: 3px; }.vue-mode-caption { font-size: 7px; }.vue-auto-view { padding: 27px 21px 23px; }.vue-auto-note { align-items: flex-start; flex-wrap: wrap; }.vue-auto-note p { min-width: 70%; }.vue-auto-note button { margin-left: 30px; }.vue-live-view, .vue-review-view { grid-template-columns: 1fr; }.vue-editor-inspector, .vue-review-panel { min-height: auto; }.vue-canvas-copy h2 { font-size: 31px; } }
 
 /* Toss-inspired information hierarchy and elevated surfaces. */
