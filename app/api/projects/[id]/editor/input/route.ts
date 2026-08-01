@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  EditorInputGenerationError,
   generateEditorInput,
   generateEditorInputRequestSchema,
 } from "@/lib/editor-input";
@@ -98,13 +99,38 @@ export async function POST(request: Request, { params }: Params) {
   }
 
   try {
-    const editorInput = await generateEditorInput(parsed.data);
-    return NextResponse.json({ status: "EDITOR_INPUT_READY", editorInput });
+    const result = await generateEditorInput(parsed.data);
+    console.info("EditorInput generated", {
+      projectId,
+      traceId: result.traceId,
+      attempts: result.attempts,
+      slideCount: result.editorInput.slides.length,
+      sourceAssetIds: result.editorInput.slides.map(
+        (slide) => slide.sourceAssetId,
+      ),
+    });
+    return NextResponse.json({ status: "EDITOR_INPUT_READY", ...result });
   } catch (error) {
+    console.error("EditorInput generation failed", {
+      projectId,
+      traceId: error instanceof EditorInputGenerationError
+        ? error.traceId
+        : undefined,
+      attempts: error instanceof EditorInputGenerationError
+        ? error.attempts
+        : undefined,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return NextResponse.json(
       {
         error: "EditorInput을 생성하지 못했어요.",
         detail: error instanceof Error ? error.message : String(error),
+        traceId: error instanceof EditorInputGenerationError
+          ? error.traceId
+          : undefined,
+        attempts: error instanceof EditorInputGenerationError
+          ? error.attempts
+          : undefined,
       },
       { status: 502 },
     );

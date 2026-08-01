@@ -1,3 +1,5 @@
+import type { EditorInput } from "@/lib/editor-input/types";
+
 export type Screen = "onboarding" | "dashboard" | "brief" | "ideas" | "editor" | "review";
 
 export type Idea = {
@@ -27,6 +29,19 @@ export type RenderedPost = {
   }[];
   caption: string;
   previewImageUrl?: string;
+  diagnostics?: EditorDiagnostics;
+};
+
+export type EditorDiagnostics = {
+  plannerTraceId?: string;
+  editorTraceId?: string;
+  editorInput: EditorInput;
+  eventLog: Array<{
+    kind: "reasoning" | "tool" | "status";
+    label: string;
+    detail?: string;
+  }>;
+  finalOutput?: unknown;
 };
 
 export type EditorPlaneResult = {
@@ -42,4 +57,5 @@ export type EditorPlaneResult = {
   caption: string;
   contactSheetImageUrl?: string;
   summary?: string;
+  diagnostics?: EditorDiagnostics;
 };

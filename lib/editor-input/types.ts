@@ -8,6 +8,7 @@ export const editorTextItemSchema = z.object({
   size: z.number().positive().max(300),
   color: z.string().min(1),
   font: z.string().min(1).optional(),
+  description: z.string().min(1),
 });
 
 export const editorInputSchema = z.object({
@@ -21,6 +22,8 @@ export const editorInputSchema = z.object({
         text: z.array(editorTextItemSchema).nullable(),
         description: z.string().min(1),
         imageUrl: z.string().url().nullable(),
+        sourceAssetId: z.string().nullable(),
+        imageDescription: z.string().min(1).nullable(),
       }),
     )
     .min(1)
@@ -41,3 +44,15 @@ export type EditorInput = z.infer<typeof editorInputSchema>;
 export type GenerateEditorInputRequest = z.infer<
   typeof generateEditorInputRequestSchema
 >;
+
+export type EditorInputGenerationAttempt = {
+  attempt: number;
+  status: "started" | "retrying" | "completed" | "failed";
+  message: string;
+};
+
+export type EditorInputGenerationResult = {
+  editorInput: EditorInput;
+  traceId: string;
+  attempts: EditorInputGenerationAttempt[];
+};
