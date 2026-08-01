@@ -512,3 +512,66 @@ button { cursor: pointer; }
 @media (max-width: 680px) {
   .review-action-grid { grid-template-columns: 1fr; }
 }
+
+.dashboard-growth-card { margin-top: 22px; padding: 28px 32px 25px; border: 1px solid var(--line); border-radius: 24px; background: var(--white); box-shadow: 0 18px 46px rgba(25,31,40,.07), 0 3px 10px rgba(25,31,40,.035); }
+.growth-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.growth-heading .section-label { display: block; }
+.growth-heading h2 { margin: 13px 0 0; color: var(--ink); font-size: 23px; letter-spacing: -.04em; }
+.growth-summary { display: flex; align-items: flex-end; gap: 10px; }
+.growth-summary strong { color: #3a9b6b; font-size: 18px; }
+.growth-summary span { color: #8b95a1; font-size: 10px; }
+.growth-description { margin: 10px 0 20px; color: #8b95a1; font-size: 11px; }
+.growth-chart { display: flex; gap: 12px; min-height: 175px; }
+.growth-y-axis { display: flex; flex-direction: column; justify-content: space-between; padding: 4px 0 24px; color: #b0b8c2; font: 9px 'DM Mono'; }
+.growth-plot { position: relative; flex: 1; min-width: 0; }
+.growth-grid-lines { position: absolute; inset: 0 0 24px; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.growth-grid-lines i { display: block; border-top: 1px dashed #e8edf3; }
+.growth-plot svg { position: relative; z-index: 1; display: block; width: 100%; height: 150px; overflow: visible; }
+.growth-area { fill: url(#growth-fill); }
+.growth-line { fill: none; stroke: var(--coral); stroke-width: 4; stroke-linecap: round; }
+.growth-plot circle { fill: var(--white); stroke: var(--coral); stroke-width: 4; }
+.growth-plot circle.growth-point { stroke-width: 3; }
+.growth-plot circle.growth-point.latest { stroke-width: 4; }
+.growth-x-axis { display: flex; justify-content: space-between; color: #b0b8c2; font: 9px 'DM Mono'; }
+@media (max-width: 680px) { .dashboard-growth-card { padding: 23px 19px 20px; }.growth-heading { flex-direction: column; gap: 10px; }.growth-chart { min-height: 150px; }.growth-plot svg { height: 125px; } }
+.top-posts-section { margin-top: 34px; }
+.top-posts-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.top-posts-heading .section-label { display: block; }
+.top-posts-heading h2 { margin: 13px 0 0; color: var(--ink); font-size: 23px; letter-spacing: -.04em; }
+.top-posts-heading > span { color: #8b95a1; font: 9px 'DM Mono'; }
+.top-posts-description { margin: 10px 0 20px; color: #8b95a1; font-size: 11px; }
+.top-posts-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.top-post-card { min-width: 0; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 18px; background: var(--white); box-shadow: 0 12px 28px rgba(25,31,40,.05); }
+.top-post-image { height: 220px; margin: -14px -16px 12px; overflow: hidden; border-radius: 18px 18px 0 0; background: #eef1f4; }
+.top-post-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.top-post-card-heading { display: flex; align-items: center; justify-content: space-between; }
+.top-post-rank { color: var(--coral); font: 700 13px 'DM Mono'; }
+.top-post-label { padding: 5px 7px; border-radius: 5px; color: #6e8dcc; background: #eff5ff; font-size: 9px; }
+.top-post-card h3 { min-height: 38px; margin: 10px 0 6px; color: var(--ink); font-size: 16px; line-height: 1.3; letter-spacing: -.04em; }
+.top-post-hook { min-height: 27px; margin: 0; color: #7d8794; font-size: 10px; line-height: 1.4; }
+.top-post-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #edf0f3; }
+.top-post-metrics span, .top-post-metrics strong { display: block; }
+.top-post-metrics span { color: #a0a9b4; font-size: 9px; }
+.top-post-metrics strong { margin-top: 5px; color: var(--ink); font-size: 14px; }
+.top-post-insight { margin-top: 10px; color: #6e8c79; font-size: 9px; }
+.top-post-insight span { margin-right: 4px; color: #e1b644; }
+@media (max-width: 680px) { .top-posts-heading { flex-direction: column; gap: 10px; }.top-posts-grid { grid-template-columns: 1fr; }.top-post-card h3, .top-post-hook { min-height: 0; } }
+
+/* Dashboard account status summary (mock data until Instagram history is available). */
+.account-summary-panel { min-height: 234px; }
+.profile-panel::before { content: 'BRAND IDENTITY'; display: block; color: #a39a91; font: 500 9px 'DM Mono'; letter-spacing: .12em; }
+.profile-panel > .section-label { display: none; }
+.profile-tags span { padding: 6px 10px; border: 1px solid var(--coral); border-radius: 999px; color: var(--coral); background: var(--white); }
+.account-summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.account-summary-heading .section-label { display: block; }
+.account-summary-heading h2 { margin: 13px 0 0; color: var(--ink); font-size: 24px; letter-spacing: -.04em; }
+.summary-period { padding: 7px 10px; border-radius: 7px; color: #5d84c8; background: #edf4ff; font: 9px 'DM Mono'; white-space: nowrap; }
+.summary-description { margin: 11px 0 0; color: #8b95a1; font-size: 11px; }
+.summary-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 24px; }
+.summary-metric { min-width: 0; padding: 14px 13px; border: 1px solid #e8edf3; border-radius: 12px; background: #fbfcfe; }
+.summary-metric span, .summary-metric small { display: block; color: #8b95a1; font-size: 10px; }
+.summary-metric strong { display: block; margin: 8px 0 5px; color: var(--ink); font-size: 22px; letter-spacing: -.04em; }
+.summary-metric small.positive { color: #3a9b6b; font-size: 10px; }
+.summary-footnote { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: #6e8c79; font-size: 10px; }
+.summary-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #55b47e; box-shadow: 0 0 0 4px #e5f5eb; }
+@media (max-width: 680px) { .summary-metrics { grid-template-columns: 1fr; }.summary-metric strong { margin: 5px 0 3px; } }

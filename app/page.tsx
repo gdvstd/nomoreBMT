@@ -751,6 +751,65 @@ function Onboarding({
   </div>;
 }
 
+function AccountGrowthChart() {
+  return (
+    <section className="dashboard-growth-card" aria-label="최근 30일 팔로워 증가 추이">
+      <div className="growth-heading">
+        <div>
+          <div className="section-label">ACCOUNT GROWTH</div>
+          <h2>팔로워 증가 추이</h2>
+        </div>
+        <div className="growth-summary"><strong>+8.4%</strong><span>최근 30일</span></div>
+      </div>
+      <p className="growth-description">계정이 꾸준히 성장하고 있어요.</p>
+      <div className="growth-chart">
+        <div className="growth-y-axis"><span>2,500</span><span>2,400</span><span>2,300</span></div>
+        <div className="growth-plot">
+          <div className="growth-grid-lines"><i /><i /><i /></div>
+          <svg viewBox="0 0 700 190" role="img" aria-label="30일 동안 2,294명에서 2,486명으로 증가한 팔로워 추이">
+            <defs><linearGradient id="growth-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#3182f6" stopOpacity=".2" /><stop offset="100%" stopColor="#3182f6" stopOpacity="0" /></linearGradient></defs>
+            <path className="growth-area" d="M0 155 C80 151 105 138 170 140 S260 128 330 116 S425 102 490 91 S590 69 700 35 L700 190 L0 190 Z" />
+            <path className="growth-line" d="M0 155 C80 151 105 138 170 140 S260 128 330 116 S425 102 490 91 S590 69 700 35" />
+            <circle className="growth-point" cx="0" cy="155" r="4" />
+            <circle className="growth-point" cx="120" cy="145" r="4" />
+            <circle className="growth-point" cx="240" cy="130" r="4" />
+            <circle className="growth-point" cx="360" cy="111" r="4" />
+            <circle className="growth-point" cx="480" cy="93" r="4" />
+            <circle className="growth-point" cx="590" cy="68" r="4" />
+            <circle className="growth-point latest" cx="700" cy="35" r="5" />
+          </svg>
+          <div className="growth-x-axis"><span>7/04</span><span>7/11</span><span>7/18</span><span>7/25</span><span>8/01</span></div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TopPosts() {
+  const posts = [
+    { rank: "01", image: "/top-posts/top-post-1.jpeg", label: "저장형 정보", title: "강릉에서 꼭 먹어야 할 한 그릇", hook: "여행 전에 저장해두면 좋은 로컬 맛집", reach: "12.8K", likes: "1,024", engagement: "8.1%" },
+    { rank: "02", image: "/top-posts/top-post-2.jpeg", label: "감성형 기록", title: "바다보다 오래 기억된 골목", hook: "관광지보다 이 장면이 더 좋았던 이유", reach: "9.6K", likes: "782", engagement: "7.4%" },
+    { rank: "03", image: "/top-posts/top-post-3.jpeg", label: "경험형 후기", title: "20분을 기다려도 다시 갈 식당", hook: "기다린 시간이 아깝지 않았던 한 끼", reach: "8.9K", likes: "691", engagement: "6.9%" },
+  ];
+
+  return (
+    <section className="top-posts-section" aria-label="성과가 좋았던 게시물 TOP 3">
+      <div className="top-posts-heading"><div><div className="section-label">TOP PERFORMING POSTS</div><h2>성과가 좋았던 게시물</h2></div><span>TOP 3 · 최근 30일</span></div>
+      <p className="top-posts-description">사람들이 많이 보고, 반응하고, 저장한 게시물들이에요.</p>
+      <div className="top-posts-grid">
+        {posts.map((post) => <article className="top-post-card" key={post.rank}>
+          <div className="top-post-image"><img src={post.image} alt={`${post.rank}위 게시물 음식 사진`} /></div>
+          <div className="top-post-card-heading"><span className="top-post-rank">{post.rank}</span><span className="top-post-label">{post.label}</span></div>
+          <h3>{post.title}</h3>
+          <p className="top-post-hook">“{post.hook}”</p>
+          <div className="top-post-metrics"><div><span>도달</span><strong>{post.reach}</strong></div><div><span>좋아요</span><strong>{post.likes}</strong></div><div><span>참여율</span><strong>{post.engagement}</strong></div></div>
+          <div className="top-post-insight"><span>✦</span> 저장과 공유를 이끈 정보형 훅</div>
+        </article>)}
+      </div>
+    </section>
+  );
+}
+
 function Dashboard({
   context,
   storageMode,
@@ -764,7 +823,7 @@ function Dashboard({
   onEditProfile: () => void;
   onSignOut: () => void;
 }) {
-  return <div className="content dashboard-page"><div className="page-heading"><div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-heading-actions"><div className="account-actions"><button className="account-action" onClick={onEditProfile}>프로필 수정</button><button className="account-action" onClick={onSignOut}>로그아웃</button></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote"><span className="profile-identity">{context.accountName}(@{context.instagramHandle})</span>{context.brandSummary.replace(/^[“"]/, "").replace(/[”"]$/, "").replace(`${context.accountName}(@${context.instagramHandle})`, "")}</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel"><div className="section-label">CONTENT PILLARS <span>{String(context.contentPillars.length).padStart(2, "0")}</span></div><div className="context-list">{context.contentPillars.map((pillar, index) => <div className="context-row" key={pillar}><span>{String(index + 1).padStart(2, "0")}</span><strong>{pillar}</strong></div>)}</div><button className="empty-project" onClick={onNewProject}>+ 이 방향으로 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
+  return <div className="content dashboard-page"><div className="page-heading"><div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-heading-actions"><div className="account-actions"><button className="account-action" onClick={onEditProfile}>프로필 수정</button><button className="account-action" onClick={onSignOut}>로그아웃</button></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote"><span className="profile-identity">{context.accountName}(@{context.instagramHandle})</span>{context.brandSummary.replace(/^[“"]/, "").replace(/[”"]$/, "").replace(`${context.accountName}(@${context.instagramHandle})`, "")}</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel account-summary-panel"><div className="account-summary-heading"><div><div className="section-label">ACCOUNT STATUS</div><h2>내 계정 상태</h2></div><span className="summary-period">최근 30일</span></div><p className="summary-description">지난 기간과 비교한 계정의 주요 성과예요.</p><div className="summary-metrics"><div className="summary-metric"><span>팔로워</span><strong>2,486</strong><small className="positive">+8.4%</small></div><div className="summary-metric"><span>도달한 계정</span><strong>18.6K</strong><small className="positive">+12.7%</small></div><div className="summary-metric"><span>참여율</span><strong>6.8%</strong><small className="positive">+1.2%p</small></div></div><div className="summary-footnote"><span className="summary-status-dot" /> 계정 흐름이 안정적으로 성장하고 있어요.</div></div></div><AccountGrowthChart /><TopPosts /><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
 }
 
 function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReorderFiles, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onReorderFiles: (fromIndex: number, toIndex: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
