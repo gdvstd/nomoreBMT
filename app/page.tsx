@@ -1,14 +1,21 @@
 "use client";
 
 import { ChangeEvent, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
+
+const EditorPlaneMount = dynamic(() => import("@/app/components/EditorPlaneMount"), {
+  ssr: false,
+  loading: () => <div className="vue-editor-mount" aria-label="편집기를 불러오는 중" />,
+});
 
 const steps: { id: Screen; label: string; number: string }[] = [
   { id: "onboarding", label: "브랜드 방향", number: "01" },
   { id: "brief", label: "콘텐츠 요청", number: "02" },
   { id: "ideas", label: "아이디어 선택", number: "03" },
-  { id: "review", label: "게시물 검토", number: "04" },
+  { id: "editor", label: "편집 과정", number: "04" },
+  { id: "review", label: "게시물 검토", number: "05" },
 ];
 
 export default function Home() {
@@ -44,7 +51,7 @@ export default function Home() {
     if (!selectedIdea) return;
     setRenderedPost(renderMockPost(selectedIdea.id));
     setActiveSlide(0);
-    setScreen("review");
+    setScreen("editor");
   }
 
   return (
@@ -85,7 +92,7 @@ export default function Home() {
 
       <section className="main-panel">
         <header className="topbar">
-          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b><strong>{screen === "onboarding" ? "ONBOARDING" : "NEW PROJECT"}</strong></div>
+          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b><strong>{screen === "onboarding" ? "ONBOARDING" : screen === "editor" ? "EDITOR PLANE" : "NEW PROJECT"}</strong></div>
           <div className="topbar-actions"><button className="help-button">? <span>도움말</span></button><div className="profile-chip">SY</div></div>
         </header>
 
@@ -105,8 +112,12 @@ export default function Home() {
           <Ideas selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
+        {screen === "editor" && selectedIdea && (
+          <EditorPlaneMount idea={selectedIdea} onBack={() => setScreen("ideas")} onFinish={() => setScreen("review")} />
+        )}
+
         {screen === "review" && renderedPost && (
-          <Review post={renderedPost} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("ideas")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
+          <Review post={renderedPost} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("editor")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
         )}
       </section>
     </main>

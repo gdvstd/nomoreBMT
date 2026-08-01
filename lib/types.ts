@@ -1,4 +1,4 @@
-export type Screen = "onboarding" | "dashboard" | "brief" | "ideas" | "review";
+export type Screen = "onboarding" | "dashboard" | "brief" | "ideas" | "editor" | "review";
 
 export type Idea = {
   id: string;

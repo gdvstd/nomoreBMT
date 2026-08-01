@@ -9,11 +9,15 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@open-pencil/core": "^0.13.2",
+    "@open-pencil/vue": "^0.13.2",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.53.0",
+    "canvaskit-wasm": "^0.41.1",
     "next": "^15.4.10",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "vue": "^3.5.40"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
