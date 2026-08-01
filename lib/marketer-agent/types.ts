@@ -4,6 +4,8 @@ export const marketerAssetSchema = z.object({
   assetId: z.string(),
   kind: z.enum(["image", "video", "generated", "logo", "other"]).default("image"),
   name: z.string().optional(),
+  /** User-provided context for the specific image; passed to the model with the asset manifest. */
+  description: z.string().max(2_000).optional(),
   /** Signed URL or a data URL for the one-shot multimodal inference. */
   url: z.string().optional(),
   /** OpenAI Files API ID, when the asset was uploaded server-side. */
