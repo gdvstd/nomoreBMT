@@ -24,6 +24,7 @@ type Props = {
   task: string;
   brandText: string;
   assetItems: { name: string; dataUrl: string }[];
+  brandContext: Record<string, unknown>;
   onBack: () => void;
   onFinish: (result?: { imageDataUrl?: string }) => void;
 };
@@ -73,6 +74,7 @@ const VueEditorPlane = defineComponent({
     task: { type: String, required: true },
     brandText: { type: String, required: true },
     assetItems: { type: Array, required: true },
+    brandContext: { type: Object, required: true },
     onBack: { type: Function, required: true },
     onFinish: { type: Function, required: true },
   },
@@ -339,6 +341,7 @@ const VueEditorPlane = defineComponent({
               props.brandText ? `Brand direction: ${props.brandText}` : "",
             ].filter(Boolean),
           },
+          brandContext: props.brandContext,
           marketerContext: { source: "BMT idea card", ideaId: props.ideaId },
           }),
         });

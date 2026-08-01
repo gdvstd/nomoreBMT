@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { BrandContext } from "@/lib/onboarding/types";
 import type { Idea } from "@/lib/types";
 
 type Props = {
@@ -8,6 +9,7 @@ type Props = {
   task: string;
   brandText: string;
   assetItems: { name: string; dataUrl: string }[];
+  brandContext: BrandContext;
   onBack: () => void;
   onFinish: (result?: { imageDataUrl?: string }) => void;
 };
@@ -19,7 +21,7 @@ type Props = {
  * does not need to know anything about Vue. The real OpenPencil runtime can
  * replace VueEditorPlane without changing this host contract.
  */
-export default function EditorPlaneMount({ idea, task, brandText, assetItems, onBack, onFinish }: Props) {
+export default function EditorPlaneMount({ idea, task, brandText, assetItems, brandContext, onBack, onFinish }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const callbacksRef = useRef({ onBack, onFinish });
   callbacksRef.current = { onBack, onFinish };
@@ -43,6 +45,7 @@ export default function EditorPlaneMount({ idea, task, brandText, assetItems, on
         task,
         brandText,
         assetItems,
+        brandContext,
         onBack: () => callbacksRef.current.onBack(),
         onFinish: (result?: { imageDataUrl?: string }) => callbacksRef.current.onFinish(result),
       });
@@ -53,7 +56,7 @@ export default function EditorPlaneMount({ idea, task, brandText, assetItems, on
       disposed = true;
       vueApp?.unmount();
     };
-  }, [assetItems, brandText, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, task]);
+  }, [assetItems, brandContext, brandText, idea.assets, idea.assetIds, idea.description, idea.format, idea.hook, idea.id, idea.slides, idea.title, task]);
 
   return <div ref={mountRef} className="vue-editor-mount" aria-label="BMT editor plane" />;
 }

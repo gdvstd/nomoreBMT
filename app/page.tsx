@@ -1,8 +1,21 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
+import {
+  brandContextSchema,
+  brandContextToAgentText,
+  EMPTY_ONBOARDING_ANSWERS,
+  normalizeInstagramHandle,
+  type BrandContext,
+  type OnboardingAnswers,
+} from "@/lib/onboarding/types";
+import {
+  loadOnboardingProfile,
+  saveOnboardingProfile,
+  type OnboardingStorageResult,
+} from "@/lib/onboarding/storage";
 import type { Idea, RenderedPost, Screen } from "@/lib/types";
 
 type UploadedAsset = {
@@ -49,7 +62,9 @@ function readFileAsDataUrl(file: File) {
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("onboarding");
-  const [brandText, setBrandText] = useState("");
+  const [onboardingAnswers, setOnboardingAnswers] = useState<OnboardingAnswers>({ ...EMPTY_ONBOARDING_ANSWERS });
+  const [brandContext, setBrandContext] = useState<BrandContext | null>(null);
+  const [storageMode, setStorageMode] = useState<OnboardingStorageResult["storage"] | null>(null);
   const [brief, setBrief] = useState("");
   const [files, setFiles] = useState<UploadedAsset[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>(mockIdeas);
@@ -70,11 +85,58 @@ export default function Home() {
     marketerStream.current?.close();
   }, []);
 
+  const brandText = useMemo(() => brandContextToAgentText(brandContext), [brandContext]);
   const currentStep = steps.findIndex((step) => step.id === screen);
   const profileSummary = useMemo(() => {
-    if (!brandText) return "아직 브랜드 방향을 입력하지 않았어요";
-    return brandText.length > 52 ? `${brandText.slice(0, 52)}…` : brandText;
-  }, [brandText]);
+    if (!brandContext) return "아직 브랜드 방향을 입력하지 않았어요";
+    return brandContext.brandSummary.length > 52
+      ? `${brandContext.brandSummary.slice(0, 52)}…`
+      : brandContext.brandSummary;
+  }, [brandContext]);
+
+  useEffect(() => {
+    let active = true;
+
+    void loadOnboardingProfile().then((saved) => {
+      if (!active || !saved) return;
+      setOnboardingAnswers(saved.profile.answers);
+      setBrandContext(saved.profile.context);
+      setStorageMode(saved.storage);
+      setScreen("dashboard");
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function completeOnboarding(answers: OnboardingAnswers) {
+    const normalizedAnswers = {
+      ...answers,
+      instagramHandle: normalizeInstagramHandle(answers.instagramHandle),
+    };
+    const response = await fetch("/api/onboarding/context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(normalizedAnswers),
+    });
+    const payload = await response.json() as { context?: unknown; error?: string };
+    if (!response.ok || !payload.context) {
+      throw new Error(payload.error ?? "브랜드 컨텍스트를 만들지 못했어요");
+    }
+
+    const context = brandContextSchema.parse(payload.context);
+    const saved = await saveOnboardingProfile({
+      answers: normalizedAnswers,
+      context,
+      updatedAt: new Date().toISOString(),
+    });
+    setOnboardingAnswers(normalizedAnswers);
+    setBrandContext(context);
+    setStorageMode(saved.storage);
+    setScreen("dashboard");
+    return saved;
+  }
 
   async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
     const incoming = Array.from(event.target.files ?? []);
@@ -155,6 +217,7 @@ export default function Home() {
           taskId: projectId,
           request: brief,
           brandDirection: brandText,
+          brandContext,
           language: "ko",
           target: "instagram_carousel",
           assets: {
@@ -302,8 +365,8 @@ export default function Home() {
         <div className="sidebar-block">
           <div className="eyebrow">YOUR WORKSPACE</div>
           <div className="workspace-card">
-            <div className="workspace-avatar">S</div>
-            <div><strong>seoyeon.studio</strong><span>Personal brand</span></div>
+            <div className="workspace-avatar">{brandContext?.accountName.slice(0, 1).toUpperCase() || "B"}</div>
+            <div><strong>{brandContext?.accountName || "New account"}</strong><span>{brandContext ? `@${brandContext.instagramHandle}` : "Personal brand"}</span></div>
             <span className="chevron">⌄</span>
           </div>
         </div>
@@ -336,11 +399,11 @@ export default function Home() {
         </header>
 
         {screen === "onboarding" && (
-          <Onboarding brandText={brandText} setBrandText={setBrandText} onContinue={() => setScreen("dashboard")} />
+          <Onboarding initialAnswers={onboardingAnswers} onSubmit={completeOnboarding} />
         )}
 
-        {screen === "dashboard" && (
-          <Dashboard brandText={brandText} onNewProject={() => setScreen("brief")} />
+        {screen === "dashboard" && brandContext && (
+          <Dashboard context={brandContext} storageMode={storageMode} onNewProject={() => setScreen("brief")} />
         )}
 
         {screen === "brief" && (
@@ -351,30 +414,83 @@ export default function Home() {
           <Ideas ideas={ideas} loading={ideasLoading} error={ideasError} currentReasoning={ideasCurrentReasoning} recentTool={ideasRecentTool} eventLog={ideasEventLog} streamText={ideasStreamText} traceId={ideasTraceId} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
-        {screen === "editor" && selectedIdea && (
-          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result) => { setRenderedPost((post) => post ? { ...post, previewImageUrl: result?.imageDataUrl } : (selectedIdea ? { ...renderMockPost(selectedIdea.id), previewImageUrl: result?.imageDataUrl } : null)); setActiveSlide(0); setScreen("review"); }} />
+        {screen === "editor" && selectedIdea && brandContext && (
+          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} brandContext={brandContext} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result) => { setRenderedPost((post) => post ? { ...post, previewImageUrl: result?.imageDataUrl } : { ...renderMockPost(selectedIdea.id), previewImageUrl: result?.imageDataUrl }); setActiveSlide(0); setScreen("review"); }} />
         )}
 
-        {screen === "review" && renderedPost && (
-          <Review post={renderedPost} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("editor")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
+        {screen === "review" && renderedPost && brandContext && (
+          <Review post={renderedPost} instagramHandle={brandContext.instagramHandle} activeSlide={activeSlide} setActiveSlide={setActiveSlide} onBack={() => setScreen("editor")} onRestart={() => { setRenderedPost(null); setScreen("brief"); }} />
         )}
       </section>
     </main>
   );
 }
 
-function Onboarding({ brandText, setBrandText, onContinue }: { brandText: string; setBrandText: (value: string) => void; onContinue: () => void }) {
+function Onboarding({
+  initialAnswers,
+  onSubmit,
+}: {
+  initialAnswers: OnboardingAnswers;
+  onSubmit: (answers: OnboardingAnswers) => Promise<OnboardingStorageResult>;
+}) {
+  const [answers, setAnswers] = useState(initialAnswers);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setAnswers(initialAnswers);
+  }, [initialAnswers]);
+
+  function updateAnswer(field: keyof OnboardingAnswers, value: string) {
+    setAnswers((previous) => ({ ...previous, [field]: value }));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await onSubmit(answers);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "온보딩을 저장하지 못했어요");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const complete = Object.values(answers).every((answer) => answer.trim());
+
   return <div className="content onboarding-screen">
     <div className="content-kicker">WELCOME TO BMT <span>✦</span></div>
     <div className="onboarding-grid">
-      <div className="intro-copy"><h1>당신의 이야기가<br /><em>브랜드</em>가 되는 곳.</h1><p>사진과 말로 당신다운 방향을 알려주세요. BMT가 다음 콘텐츠의 첫 구조를 함께 만듭니다.</p><div className="intro-note"><span>✦</span><div><strong>한 문장보다, 한 장면처럼</strong><p>완벽한 답을 준비할 필요 없어요. 지금 떠오르는 말 그대로 적어주세요.</p></div></div></div>
-      <div className="form-card"><div className="form-card-top"><span className="card-index">01</span><span className="required">REQUIRED</span></div><label htmlFor="brand">나를 어떤 브랜드로 기억하게 하고 싶나요?</label><textarea id="brand" value={brandText} onChange={(event) => setBrandText(event.target.value)} placeholder="예: 저는 국내 소도시 여행과 맛집을 소개해요. 과장되지 않고, 친구가 추천해주는 듯한 따뜻한 분위기를 만들고 싶어요." /><div className="character-count">{brandText.length} / 500</div><button className="primary-button" disabled={!brandText.trim()} onClick={onContinue}>브랜드 방향 저장하기 <span>→</span></button></div>
+      <div className="intro-copy"><h1>당신의 이야기가<br /><em>브랜드</em>가 되는 곳.</h1><p>몇 가지 답변을 바탕으로 모든 마케터·편집 작업에 공통으로 쓰일 브랜드 컨텍스트를 만들어요.</p><div className="intro-note"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div></div>
+      <form className="form-card onboarding-form" onSubmit={submit}>
+        <div className="form-card-top"><span className="card-index">01 — 05</span><span className="required">ALL REQUIRED</span></div>
+        <div className="identity-fields">
+          <label className="qa-field" htmlFor="accountName"><span>계정 이름</span><input id="accountName" value={answers.accountName} onChange={(event) => updateAnswer("accountName", event.target.value)} placeholder="예: 소도시 식탁" maxLength={80} /></label>
+          <label className="qa-field" htmlFor="instagramHandle"><span>Instagram ID</span><div className="handle-input"><b>@</b><input id="instagramHandle" value={answers.instagramHandle} onChange={(event) => updateAnswer("instagramHandle", event.target.value)} placeholder="smallcity.table" maxLength={64} autoCapitalize="none" /></div></label>
+        </div>
+        <label className="qa-field" htmlFor="desiredMood"><span>어떤 mood를 원하세요?</span><textarea id="desiredMood" value={answers.desiredMood} onChange={(event) => updateAnswer("desiredMood", event.target.value)} placeholder="예: 따뜻하고 차분하지만 정보는 빠르게 읽히는 분위기" maxLength={500} /></label>
+        <label className="qa-field" htmlFor="mainTopics"><span>주로 어떤 주제를 다루시나요?</span><textarea id="mainTopics" value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집, 카페와 시장" maxLength={500} /></label>
+        <label className="qa-field" htmlFor="preferredFormats"><span>유지하고 싶은 format이 있나요?</span><textarea id="preferredFormats" value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 카드뉴스, 마지막 장에는 저장 CTA" maxLength={500} /></label>
+        {error && <div className="onboarding-error"><span>!</span>{error}</div>}
+        <button className="primary-button onboarding-submit" disabled={!complete || loading} type="submit">{loading ? "브랜드 컨텍스트 만드는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
+        <p className="storage-note">답변은 이 기기에 먼저 저장되며, 로그인된 Supabase 계정이 있으면 사용자 DB에도 동기화됩니다.</p>
+      </form>
     </div>
   </div>;
 }
 
-function Dashboard({ brandText, onNewProject }: { brandText: string; onNewProject: () => void }) {
-  return <div className="content"><div className="page-heading"><div><div className="content-kicker">WORKSPACE / OVERVIEW</div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote">“{brandText}”</div><div className="profile-tags"><span>여행</span><span>맛집</span><span>따뜻한 톤</span></div><button className="text-button">프로필 자세히 보기 →</button></div><div className="activity-panel"><div className="section-label">RECENT PROJECTS <span>01</span></div><div className="project-row"><div className="project-art art-coast"><span>강릉</span></div><div className="project-info"><strong>강릉 미식 여행</strong><span>아이디어 선택 대기 중 · 오늘</span></div><span className="status-pill">DRAFT</span></div><button className="empty-project" onClick={onNewProject}>+ 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>TIP</span><p>사진이 많을수록 좋아요. 한 번의 여행에서 발견한 장면을 한꺼번에 올려보세요.</p></div></div>;
+function Dashboard({
+  context,
+  storageMode,
+  onNewProject,
+}: {
+  context: BrandContext;
+  storageMode: OnboardingStorageResult["storage"] | null;
+  onNewProject: () => void;
+}) {
+  return <div className="content"><div className="page-heading"><div><div className="content-kicker">WORKSPACE / OVERVIEW</div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION <span>{storageMode === "supabase" ? "DB SYNCED" : "LOCAL SAVED"}</span></div><div className="profile-account">{context.accountName} · @{context.instagramHandle}</div><div className="profile-quote">“{context.brandSummary}”</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel"><div className="section-label">CONTENT PILLARS <span>{String(context.contentPillars.length).padStart(2, "0")}</span></div><div className="context-list">{context.contentPillars.map((pillar, index) => <div className="context-row" key={pillar}><span>{String(index + 1).padStart(2, "0")}</span><strong>{pillar}</strong></div>)}</div><button className="empty-project" onClick={onNewProject}>+ 이 방향으로 새 프로젝트 시작</button></div></div><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
 }
 
 function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
@@ -467,8 +583,8 @@ function Ideas({ ideas, loading, error, currentReasoning, recentTool, eventLog, 
   );
 }
 
-function Review({ post, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
+function Review({ post, instagramHandle, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; instagramHandle: string; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
   const slide = post.slides[activeSlide];
   const previewImage = post.previewImageUrl ? <img className="agent-rendered-image" src={post.previewImageUrl} alt="편집자 에이전트 결과" /> : null;
-  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${post.previewImageUrl ? "agent-rendered" : ""}`}>{previewImage}<div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>seoyeon.studio</span><span>✦</span></div></div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={() => window.alert("다운로드 준비가 완료됐어요. (MVP Mock)")}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
+  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${post.previewImageUrl ? "agent-rendered" : ""}`}>{previewImage}<div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>@{instagramHandle}</span><span>✦</span></div></div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={() => window.alert("다운로드 준비가 완료됐어요. (MVP Mock)")}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
 }

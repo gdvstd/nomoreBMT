@@ -84,6 +84,9 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
     safeJson(input.openPencil),
     "\nDESIGN PRINCIPLES\n",
     safeJson(input.designPrinciples),
+    input.brandContext
+      ? `\nONBOARDING BRAND CONTEXT\n${safeJson(input.brandContext)}`
+      : "",
     input.marketerContext
       ? `\nMARKETER CONTEXT\n${safeJson(input.marketerContext)}`
       : "",

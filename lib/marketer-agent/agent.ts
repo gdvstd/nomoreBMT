@@ -50,6 +50,9 @@ function buildTextPrompt(input: MarketerAgentInput) {
     input.request,
     "\nBRAND DIRECTION\n",
     input.brandDirection || "No additional brand direction was provided.",
+    input.brandContext
+      ? `\nSTRUCTURED ONBOARDING CONTEXT\n${safeJson(input.brandContext)}`
+      : "",
     "\nTARGET\n",
     `${input.target}; output language: ${input.language}`,
     "\nASSET MANIFEST (the images follow this text)\n",
