@@ -562,6 +562,11 @@ button { cursor: pointer; }
 .profile-panel::before { content: 'BRAND IDENTITY'; display: block; color: #a39a91; font: 500 9px 'DM Mono'; letter-spacing: .12em; }
 .profile-panel > .section-label { display: none; }
 .profile-tags span { padding: 6px 10px; border: 1px solid var(--coral); border-radius: 999px; color: var(--coral); background: var(--white); }
+.onboarding-form-only > .onboarding-form-intro { margin: 0; padding: 0 2px 4px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.onboarding-form-only > .onboarding-form-intro { display: block; }
+.onboarding-form-only > .onboarding-form-intro > span { display: none; }
+.onboarding-form-only > .onboarding-form-intro strong { color: var(--ink); font-size: 30px; line-height: 1.18; letter-spacing: -.055em; }
+.onboarding-form-only > .onboarding-form-intro p { margin: 0; color: #8b95a1; font-size: 17px; line-height: 1.5; }
 .account-summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .account-summary-heading .section-label { display: block; }
 .account-summary-heading h2 { margin: 13px 0 0; color: var(--ink); font-size: 24px; letter-spacing: -.04em; }
@@ -575,3 +580,4 @@ button { cursor: pointer; }
 .summary-footnote { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: #6e8c79; font-size: 10px; }
 .summary-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #55b47e; box-shadow: 0 0 0 4px #e5f5eb; }
 @media (max-width: 680px) { .summary-metrics { grid-template-columns: 1fr; }.summary-metric strong { margin: 5px 0 3px; } }
+@media (max-width: 680px) { .onboarding-form-only > .onboarding-form-intro strong { font-size: 30px; }.onboarding-form-only > .onboarding-form-intro p { font-size: 14px; } }
