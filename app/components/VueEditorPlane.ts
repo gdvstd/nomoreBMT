@@ -1,7 +1,9 @@
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from "vue";
 import { ALL_TOOLS, CORE_TOOLS, type ToolDef } from "@open-pencil/core/tools";
 import { FigmaAPI } from "@open-pencil/core/figma-api";
 import { createEditor, type Tool } from "@open-pencil/core/editor";
+import { renderNodesToImage, type RasterExportFormat } from "../../node_modules/@open-pencil/core/dist/io/formats/raster/render.js";
+import type { EditorPlaneResult } from "@/lib/types";
 // Import the two focused Vue composable modules directly. OpenPencil 0.13.2's
 // package barrel currently references optional worker files that are not shipped
 // in the npm tarball; the canvas modules themselves are complete and browser-safe.
@@ -26,7 +28,32 @@ type Props = {
   assetItems: { name: string; dataUrl: string }[];
   brandContext: Record<string, unknown>;
   onBack: () => void;
-  onFinish: (result?: { imageDataUrl?: string }) => void;
+  onFinish: (result: EditorPlaneResult) => void;
+};
+
+type AgentOutput = {
+  status?: "completed" | "needs_input" | "failed";
+  cardRoots?: Array<{ index?: number; nodeId?: string; purpose?: string; assetIds?: string[] }>;
+  slides?: Array<{ index?: number; nodeId?: string; title?: string; copy?: string; assetIds?: string[] }>;
+  caption?: string;
+  summary?: string;
+  warnings?: string[];
+  unresolved?: string[];
+};
+
+type CarouselValidation = {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  cards: Array<{
+    index: number;
+    nodeId: string;
+    type?: string;
+    width?: number;
+    height?: number;
+    childCount: number;
+    hasImage: boolean;
+  }>;
 };
 
 const modeCopy: Record<Mode, { label: string; caption: string; description: string }> = {
@@ -88,20 +115,56 @@ const VueEditorPlane = defineComponent({
     const streamedAgentText = ref("");
     const selectedLayer = ref("headline");
     const activeTool = ref<Tool>("SELECT");
+    const canvasViewportSize = { width: 960, height: 620 };
     const editor = createEditor({
-      getViewportSize: () => ({ width: 960, height: 620 }),
+      getViewportSize: () => ({ ...canvasViewportSize }),
+    });
+    let resolveRendererReady: (() => void) | undefined;
+    const rendererReady = new Promise<void>((resolve) => {
+      resolveRendererReady = resolve;
     });
     const figma = new FigmaAPI(editor.graph);
+    figma.exportImage = async (nodeIds, options) => {
+      const renderer = editor.renderer;
+      if (!renderer) throw new Error("OpenPencil canvas renderer is not ready");
+
+      renderer.invalidateAllPictures();
+      const restoreTextMeasurer = await renderer.prepareForExport(
+        editor.graph,
+        figma.currentPageId,
+        nodeIds,
+      );
+      try {
+        return renderNodesToImage(
+          renderer.ck,
+          renderer,
+          editor.graph,
+          figma.currentPageId,
+          nodeIds,
+          {
+            scale: options.scale ?? 1,
+            format: (options.format ?? "PNG") as RasterExportFormat,
+            quality: options.quality,
+          },
+        );
+      } finally {
+        restoreTextMeasurer();
+      }
+    };
     const agentConnected = ref(false);
     const agentError = ref("");
     const agentSessionId = ref<string | null>(null);
     const agentTraceId = ref<string | null>(null);
     let agentStream: EventSource | undefined;
+    let agentEventSequence = 0;
     const exportedImage = ref<string | null>(null);
+    const exportedCardImages = ref<string[]>([]);
+    const finalAgentOutput = ref<AgentOutput | null>(null);
+    const assetCloneIds = new Set<string>();
 
     function pushAgentEvent(kind: AgentLogEntry["kind"], label: string, detail?: string) {
       agentEventLog.value = [{
-        id: `${Date.now()}-${agentEventLog.value.length}`,
+        id: `${Date.now()}-${agentEventSequence++}`,
         kind,
         label,
         detail,
@@ -118,13 +181,41 @@ const VueEditorPlane = defineComponent({
       }
     }
 
+    function normalizeRenderArgs(args: Record<string, unknown>) {
+      if (typeof args.jsx !== "string") return args;
+      let jsx = args.jsx
+        .replace(/\{\s*["'](?:\\n|\r?\n)["']\s*\}/g, " ")
+        .replace(/\\n/g, " ");
+      const openFrames = jsx.match(/<Frame\b/g)?.length ?? 0;
+      let closeFrames = jsx.match(/<\/Frame>/g)?.length ?? 0;
+      while (closeFrames > openFrames) {
+        const extraClosingTag = jsx.lastIndexOf("</Frame>");
+        if (extraClosingTag < 0) break;
+        jsx = `${jsx.slice(0, extraClosingTag)}${jsx.slice(extraClosingTag + "</Frame>".length)}`;
+        closeFrames -= 1;
+      }
+      const normalized: Record<string, unknown> = jsx === args.jsx ? { ...args } : { ...args, jsx };
+      if (typeof args.replace_id === "string") {
+        const cardIndex = cardRootIds.indexOf(args.replace_id);
+        const slot = cardSlots[cardIndex];
+        if (slot) {
+          if (typeof normalized.x !== "number") normalized.x = slot.x;
+          if (typeof normalized.y !== "number") normalized.y = slot.y;
+        }
+      }
+      return normalized;
+    }
+
     const browserToolDefs = new Map<string, ToolDef>([
       ...CORE_TOOLS,
-      ...ALL_TOOLS.filter((definition) => definition.name === "set_image_fill" || definition.name === "export_image"),
+      ...ALL_TOOLS.filter((definition) => ["clone_node", "set_image_fill", "export_image"].includes(definition.name)),
     ].map((definition) => [definition.name, definition]));
 
-    // Seed a real OpenPencil document. The editor agent can replace this graph
-    // with generated assets and layouts without changing the host UI contract.
+    // Seed explicit card roots and a separate asset-source area. The old MVP
+    // selected six arbitrary layers from one fixed template, which let the
+    // model mistake those layers for six carousel cards. Every target below is
+    // now a real 1080x1350 FRAME, while uploaded images live in non-target
+    // source nodes that can be duplicated with OpenPencil's clone_node tool.
     const fill = (hex: string, opacity = 1) => {
       const value = hex.replace("#", "");
       return {
@@ -147,46 +238,78 @@ const VueEditorPlane = defineComponent({
       return id;
     };
 
-    const text = (name: string, value: string, x: number, y: number, width: number, height: number, size: number, color: string, weight = 500) => {
-      const id = editor.createShape("TEXT", x, y, width, height);
-      editor.updateNode(id, {
-        name,
-        text: value,
-        fontSize: size,
-        fontFamily: "Inter",
-        fontWeight: weight,
-        fills: [fill(color)],
-        textAutoResize: "HEIGHT",
-        lineHeight: size * 0.95,
-      });
-      return id;
-    };
-
     const layerIds: Record<string, string> = {};
-    layerIds.background = rect("background / warm paper", 0, 0, 1080, 1350, "#efe8dc");
-    layerIds["route-map"] = rect("route map / base", 60, 155, 960, 690, "#b3c3bd");
-    rect("route map / river", 80, 430, 920, 34, "#d7e2d6");
-    rect("route map / route", 260, 260, 520, 18, "#d86e53", 9);
-    layerIds.mainPhoto = rect("main photo / crop", 150, 775, 780, 405, "#667d80", 10);
-    layerIds.secondaryPhoto = rect("secondary photo / crop", 110, 610, 265, 225, "#ae7c60", 8);
-    layerIds.sticker = rect("sticker / yellow", 825, 125, 120, 120, "#f8d84d", 60);
-    text("eyebrow / label", "SAVE THIS ROUTE", 92, 86, 300, 38, 18, "#332e29", 700);
-    layerIds.headline = text("headline / text", "강릉에서\n아무 데나\n들어가기 싫다면", 92, 255, 620, 250, 66, "#ffffff", 700);
-    text("map / label", "강릉", 385, 490, 260, 70, 46, "#ffffff", 500);
-    text("main photo / label", "PHOTO 01", 205, 930, 250, 44, 18, "#ffffff", 700);
-    text("secondary photo / label", "PHOTO 17", 143, 700, 170, 34, 14, "#ffffff", 700);
-    text("body / description", "사진 속 장소를 동선으로 엮어\n저장하고 싶은 여행 가이드로.", 96, 565, 480, 100, 22, "#332e29", 500);
-    text("footer / signature", "BMT / SEYEON.STUDIO                                      01", 92, 1240, 890, 36, 15, "#332e29", 600);
-    figma.currentPage.selection = Object.values(layerIds)
+    const cardCount = props.ideaSlides.length;
+    if (cardCount === 0) {
+      throw new Error("선택한 아이디어에 슬라이드 계획이 없습니다.");
+    }
+    const cardColumns = Math.min(3, cardCount);
+    const cardGap = 120;
+    const cardSlots = Array.from({ length: cardCount }, (_, index) => ({
+      x: (index % cardColumns) * (1080 + cardGap),
+      y: Math.floor(index / cardColumns) * (1350 + cardGap),
+    }));
+    const cardRootIds = Array.from({ length: cardCount }, (_, index) => {
+      const slot = cardSlots[index];
+      const id = editor.createShape(
+        "FRAME",
+        slot.x,
+        slot.y,
+        1080,
+        1350,
+      );
+      editor.updateNode(id, {
+        name: `CARD_ROOT_${String(index + 1).padStart(2, "0")} / EMPTY_PLACEHOLDER`,
+        fills: [fill(index === 0 ? "#efe8dc" : "#f5f1ea")],
+        clipsContent: true,
+      });
+      layerIds[`card-${index + 1}`] = id;
+      return id;
+    });
+
+    const assetAreaY = Math.ceil(cardCount / cardColumns) * (1350 + cardGap) + 120;
+    const assetNodeIds = props.assetItems.map((asset, index) => {
+      const id = rect(
+        `ASSET_SOURCE_${String(index + 1).padStart(2, "0")} / ${asset.name}`,
+        (index % 4) * 380,
+        assetAreaY + Math.floor(index / 4) * 320,
+        340,
+        260,
+        "#d8d2c8",
+        8,
+      );
+      layerIds[`asset-${index + 1}`] = id;
+      return id;
+    });
+
+    function fitCardOverview(canvasElement?: HTMLCanvasElement | null) {
+      if (canvasElement) {
+        canvasViewportSize.width = Math.max(1, canvasElement.clientWidth);
+        canvasViewportSize.height = Math.max(1, canvasElement.clientHeight);
+      }
+      const minX = Math.min(...cardSlots.map((slot) => slot.x));
+      const minY = Math.min(...cardSlots.map((slot) => slot.y));
+      const maxX = Math.max(...cardSlots.map((slot) => slot.x + 1080));
+      const maxY = Math.max(...cardSlots.map((slot) => slot.y + 1350));
+      editor.zoomToBounds(minX, minY, maxX, maxY);
+    }
+
+    let visibleCanvasElement: HTMLCanvasElement | null = null;
+    function scheduleCardOverviewFit() {
+      void nextTick().then(() => {
+        requestAnimationFrame(() => fitCardOverview(visibleCanvasElement));
+      });
+    }
+
+    figma.currentPage.selection = cardRootIds
       .map((id) => figma.getNodeById(id))
       .filter((node): node is NonNullable<typeof node> => node !== null);
 
     async function hydrateUserAssets() {
       const definition = browserToolDefs.get("set_image_fill");
       if (!definition) return;
-      const targets = [layerIds.mainPhoto, layerIds.secondaryPhoto];
       for (const [index, asset] of props.assetItems.entries()) {
-        const target = targets[index % targets.length];
+        const target = assetNodeIds[index];
         const imageData = asset.dataUrl.includes(",") ? asset.dataUrl.slice(asset.dataUrl.indexOf(",") + 1) : asset.dataUrl;
         if (!target || !imageData) continue;
         try {
@@ -195,6 +318,116 @@ const VueEditorPlane = defineComponent({
           pushAgentEvent("status", `${asset.name} 이미지 주입 실패`, error instanceof Error ? error.message : String(error));
         }
       }
+    }
+
+    function findCardIndexForNode(nodeId: string) {
+      let current = editor.graph.getNode(nodeId);
+      const visited = new Set<string>();
+      while (current && !visited.has(current.id)) {
+        const cardIndex = cardRootIds.indexOf(current.id);
+        if (cardIndex >= 0) return cardIndex;
+        visited.add(current.id);
+        current = current.parentId ? editor.graph.getNode(current.parentId) : undefined;
+      }
+      return -1;
+    }
+
+    function nodeContainsImage(nodeId: string, visited = new Set<string>()): boolean {
+      if (visited.has(nodeId)) return false;
+      visited.add(nodeId);
+      const node = editor.graph.getNode(nodeId);
+      if (!node) return false;
+      if (node.fills.some((paint) => paint.type === "IMAGE" && paint.visible !== false)) return true;
+      return node.childIds.some((childId) => nodeContainsImage(childId, visited));
+    }
+
+    function nodeContainsLiteralNewline(nodeId: string, visited = new Set<string>()): boolean {
+      if (visited.has(nodeId)) return false;
+      visited.add(nodeId);
+      const node = editor.graph.getNode(nodeId);
+      if (!node) return false;
+      if (node.type === "TEXT" && node.text.includes("\\n")) return true;
+      return node.childIds.some((childId) => nodeContainsLiteralNewline(childId, visited));
+    }
+
+    function validateCarousel(): CarouselValidation {
+      const errors: string[] = [];
+      const warnings: string[] = [];
+      const uniqueIds = new Set(cardRootIds);
+      if (cardRootIds.length !== cardCount || uniqueIds.size !== cardCount) {
+        errors.push(`Expected ${cardCount} distinct card roots, found ${uniqueIds.size}.`);
+      }
+
+      const bounds: Array<{ index: number; x: number; y: number; width: number; height: number }> = [];
+      const cards = cardRootIds.map((nodeId, index) => {
+        const node = editor.graph.getNode(nodeId);
+        if (!node) {
+          errors.push(`Card ${index + 1}: root ${nodeId} does not exist.`);
+          return { index, nodeId, childCount: 0, hasImage: false };
+        }
+
+        if (node.type !== "FRAME") errors.push(`Card ${index + 1}: root must be FRAME, found ${node.type}.`);
+        if (Math.abs(node.width - 1080) > 1 || Math.abs(node.height - 1350) > 1) {
+          errors.push(`Card ${index + 1}: expected 1080x1350, found ${Math.round(node.width)}x${Math.round(node.height)}.`);
+        }
+        if (node.childIds.length === 0) errors.push(`Card ${index + 1}: contains no visual children.`);
+
+        const hasImage = nodeContainsImage(nodeId);
+        if (props.assetItems.length > 0 && !hasImage) {
+          errors.push(`Card ${index + 1}: no visible user image fill was found.`);
+        }
+        if (nodeContainsLiteralNewline(nodeId)) {
+          errors.push(`Card ${index + 1}: contains a literal \\n sequence in text.`);
+        }
+
+        bounds.push({ index, x: node.x, y: node.y, width: node.width, height: node.height });
+        return {
+          index,
+          nodeId,
+          type: node.type,
+          width: node.width,
+          height: node.height,
+          childCount: node.childIds.length,
+          hasImage,
+        };
+      });
+
+      for (let first = 0; first < bounds.length; first += 1) {
+        for (let second = first + 1; second < bounds.length; second += 1) {
+          const a = bounds[first];
+          const b = bounds[second];
+          const overlaps = a.x < b.x + b.width
+            && a.x + a.width > b.x
+            && a.y < b.y + b.height
+            && a.y + a.height > b.y;
+          if (overlaps) errors.push(`Cards ${a.index + 1} and ${b.index + 1} overlap.`);
+        }
+      }
+
+      if (props.assetItems.length === 0) warnings.push("No user assets were supplied, so image-fill checks were skipped.");
+      return { ok: errors.length === 0, errors, warnings, cards };
+    }
+
+    async function exportNodes(ids: string[]) {
+      const definition = browserToolDefs.get("export_image");
+      if (!definition) throw new Error("OpenPencil export_image tool is unavailable");
+      if (editor.renderer) figma.setRenderer(editor.renderer);
+      const result = await definition.execute(figma, {
+        ids,
+        format: "PNG",
+        scale: 1,
+      }) as { base64?: string; mimeType?: string; error?: string };
+      if (result.error) throw new Error(result.error);
+      if (!result.base64) throw new Error("OpenPencil export_image returned no image data");
+      return `data:${result.mimeType ?? "image/png"};base64,${result.base64}`;
+    }
+
+    async function ensureCarouselExports() {
+      const images: string[] = [];
+      for (const nodeId of cardRootIds) images.push(await exportNodes([nodeId]));
+      exportedCardImages.value = images;
+      exportedImage.value = await exportNodes([...cardRootIds]);
+      return { cardImages: images, contactSheetImageUrl: exportedImage.value };
     }
 
     async function postBridgeResponse(requestId: string, payload: Record<string, unknown>) {
@@ -236,6 +469,14 @@ const VueEditorPlane = defineComponent({
         return;
       }
 
+      if (request.toolName === "validate_carousel") {
+        await postBridgeResponse(request.requestId, {
+          result: validateCarousel(),
+          graphRevision: String(Date.now()),
+        });
+        return;
+      }
+
       const definition = browserToolDefs.get(request.toolName);
       if (!definition) {
         await postBridgeResponse(request.requestId, { error: `Unknown OpenPencil tool: ${request.toolName}` });
@@ -247,7 +488,26 @@ const VueEditorPlane = defineComponent({
         // FigmaAPI pointed at the same renderer makes export_image verify the
         // exact graph the user sees.
         if (editor.renderer) figma.setRenderer(editor.renderer);
-        const rawResult = request.toolName === "get_selection"
+        const replacedCardIndex = request.toolName === "render" && typeof request.args.replace_id === "string"
+          ? cardRootIds.indexOf(request.args.replace_id)
+          : -1;
+        const toolArgs = request.toolName === "render"
+          ? normalizeRenderArgs(request.args)
+          : request.toolName === "export_image"
+            ? {
+                ...request.args,
+                ids: Array.isArray(request.args.ids) && request.args.ids.length > 0
+                  ? request.args.ids
+                  : [...cardRootIds],
+              }
+            : request.args;
+        if (request.toolName === "reparent_node"
+          && typeof toolArgs.id === "string"
+          && assetNodeIds.includes(toolArgs.id)) {
+          throw new Error("Asset source nodes are immutable. Call clone_node first, then reparent the clone.");
+        }
+
+        let rawResult = request.toolName === "get_selection"
           ? {
               selection: figma.currentPage.selection.map((node) => ({
                 id: node.id,
@@ -259,9 +519,81 @@ const VueEditorPlane = defineComponent({
                 height: node.height,
               })),
             }
-          : await definition.execute(figma, request.toolName === "get_node" && request.args.depth === undefined
-            ? { ...request.args, depth: 0 }
-            : request.args);
+          : await definition.execute(figma, request.toolName === "get_node" && toolArgs.depth === undefined
+            ? { ...toolArgs, depth: 0 }
+            : toolArgs);
+        if (rawResult && typeof rawResult === "object" && typeof (rawResult as { error?: unknown }).error === "string") {
+          throw new Error((rawResult as { error: string }).error);
+        }
+        if (request.toolName === "render"
+          && typeof request.args.replace_id === "string"
+          && rawResult && typeof rawResult === "object"
+          && typeof (rawResult as { id?: unknown }).id === "string") {
+          if (replacedCardIndex >= 0) {
+            const nextId = (rawResult as { id: string }).id;
+            const slot = cardSlots[replacedCardIndex];
+            editor.updateNode(nextId, {
+              x: slot.x,
+              y: slot.y,
+              width: 1080,
+              height: 1350,
+              clipsContent: true,
+            });
+            cardRootIds[replacedCardIndex] = nextId;
+            layerIds[`card-${replacedCardIndex + 1}`] = nextId;
+          }
+        }
+        if (request.toolName === "clone_node"
+          && typeof toolArgs.id === "string"
+          && (assetNodeIds.includes(toolArgs.id) || assetCloneIds.has(toolArgs.id))
+          && rawResult && typeof rawResult === "object"
+          && typeof (rawResult as { id?: unknown }).id === "string") {
+          assetCloneIds.add((rawResult as { id: string }).id);
+        }
+        if (request.toolName === "reparent_node"
+          && typeof toolArgs.id === "string"
+          && typeof toolArgs.parent_id === "string"
+          && assetCloneIds.has(toolArgs.id)
+          && findCardIndexForNode(toolArgs.parent_id) >= 0) {
+          const parent = editor.graph.getNode(toolArgs.parent_id);
+          if (!parent) throw new Error(`Image destination ${toolArgs.parent_id} was not found after reparenting.`);
+          editor.updateNode(toolArgs.id, {
+            x: 0,
+            y: 0,
+            width: Math.max(1, parent.width),
+            height: Math.max(1, parent.height),
+            visible: true,
+          });
+          if (parent.type === "FRAME") editor.updateNode(parent.id, { clipsContent: true });
+          rawResult = {
+            ...(rawResult as Record<string, unknown>),
+            placement: {
+              x: 0,
+              y: 0,
+              width: parent.width,
+              height: parent.height,
+              cardIndex: findCardIndexForNode(parent.id),
+              imageFillPreserved: nodeContainsImage(toolArgs.id),
+            },
+          };
+        }
+        if (request.toolName === "export_image"
+          && rawResult && typeof rawResult === "object"
+          && typeof (rawResult as { base64?: unknown }).base64 === "string") {
+          const exportResult = rawResult as { base64: string; mimeType?: string };
+          const imageDataUrl = `data:${exportResult.mimeType ?? "image/png"};base64,${exportResult.base64}`;
+          const exportIds = Array.isArray(toolArgs.ids) ? toolArgs.ids.filter((id): id is string => typeof id === "string") : [];
+          if (exportIds.length === 1) {
+            const cardIndex = cardRootIds.indexOf(exportIds[0]);
+            if (cardIndex >= 0) {
+              const nextImages = [...exportedCardImages.value];
+              nextImages[cardIndex] = imageDataUrl;
+              exportedCardImages.value = nextImages;
+            }
+          } else if (exportIds.length === cardRootIds.length && exportIds.every((id) => cardRootIds.includes(id))) {
+            exportedImage.value = imageDataUrl;
+          }
+        }
         // Selection snapshots can contain full paint/text trees. Keep the
         // bridge response compact so the model can continue without waiting
         // on a huge JSON payload.
@@ -305,7 +637,7 @@ const VueEditorPlane = defineComponent({
             request: props.task,
             target: "instagram_carousel",
             language: "ko",
-            cardCount: props.ideaSlides.length || 7,
+            cardCount,
           },
           ideaCard: {
             id: props.ideaId,
@@ -324,12 +656,16 @@ const VueEditorPlane = defineComponent({
               kind: "image",
               name: asset.name,
               url: asset.dataUrl,
-              nodeId: [layerIds.mainPhoto, layerIds.secondaryPhoto][index % 2],
+              nodeId: assetNodeIds[index],
             })),
           },
           openPencil: {
             sessionId: browserContextId,
-            targetNodeIds: Object.values(layerIds),
+            documentId: browserContextId,
+            pageId: figma.currentPageId,
+            targetNodeIds: cardRootIds,
+            cardRootIds,
+            assetNodeIds,
             canvasWidth: 1080,
             canvasHeight: 1350,
           },
@@ -359,7 +695,7 @@ const VueEditorPlane = defineComponent({
           agentConnected.value = true;
         });
         agentStream.addEventListener("tool_call", executeAgentTool as unknown as EventListener);
-        agentStream.addEventListener("agent_event", (event) => {
+        agentStream.addEventListener("agent_event", async (event) => {
           const detail = JSON.parse((event as MessageEvent<string>).data) as {
             event?: {
               type?: string;
@@ -376,12 +712,7 @@ const VueEditorPlane = defineComponent({
               args?: Record<string, unknown>;
               result?: unknown;
               error?: string;
-              output?: {
-                status?: "completed" | "needs_input" | "failed";
-                summary?: string;
-                warnings?: string[];
-                unresolved?: string[];
-              };
+              output?: AgentOutput;
             };
           };
           const agentEvent = detail.event;
@@ -441,6 +772,34 @@ const VueEditorPlane = defineComponent({
             pushAgentEvent("status", agentEvent.message, agentEvent.status);
           }
           if (agentEvent?.type === "status" && agentEvent.status === "completed" && agentEvent.output?.status === "completed") {
+            finalAgentOutput.value = agentEvent.output;
+            const completedRootIds = agentEvent.output.cardRoots?.map((root) => root.nodeId).filter((id): id is string => Boolean(id));
+            if (completedRootIds?.length === cardCount
+              && completedRootIds.every((id) => Boolean(editor.graph.getNode(id)))) {
+              completedRootIds.forEach((id, index) => {
+                cardRootIds[index] = id;
+                layerIds[`card-${index + 1}`] = id;
+              });
+            }
+            const validation = validateCarousel();
+            if (!validation.ok) {
+              agentError.value = validation.errors.join(" · ");
+              currentReasoning.value = `완료 검증 실패: ${agentError.value}`;
+              recentTool.value = "validate_carousel 실패";
+              pushAgentEvent("status", "완료 검증 실패", agentError.value);
+              progress.value = Math.min(progress.value, 99);
+              return;
+            }
+            try {
+              await ensureCarouselExports();
+            } catch (error) {
+              agentError.value = error instanceof Error ? error.message : String(error);
+              currentReasoning.value = `최종 이미지 생성 실패: ${agentError.value}`;
+              recentTool.value = "export_image 실패";
+              pushAgentEvent("status", "최종 이미지 생성 실패", agentError.value);
+              progress.value = Math.min(progress.value, 99);
+              return;
+            }
             progress.value = 100;
             planSteps.value = planSteps.value.map((step) => ({ ...step, status: "complete" }));
             currentReasoning.value = "편집 작업이 완료됐어요.";
@@ -451,6 +810,7 @@ const VueEditorPlane = defineComponent({
             currentReasoning.value = unresolved || agentEvent.message || "추가 입력이나 편집 tool이 필요해요.";
             recentTool.value = "작업 보류";
             agentError.value = currentReasoning.value;
+            progress.value = Math.min(progress.value, 99);
             planSteps.value = planSteps.value.map((step) => step.status === "active" ? { ...step, status: "blocked" } : step);
             pushAgentEvent("status", "추가 입력 필요", currentReasoning.value);
           }
@@ -458,6 +818,8 @@ const VueEditorPlane = defineComponent({
             currentReasoning.value = agentEvent.message ?? "Editor agent 작업이 실패했어요";
             pushAgentEvent("status", currentReasoning.value, "failed");
             agentError.value = currentReasoning.value;
+            progress.value = Math.min(progress.value, 99);
+            planSteps.value = planSteps.value.map((step) => step.status === "active" ? { ...step, status: "blocked" } : step);
           }
         });
         agentStream.addEventListener("error", (event) => {
@@ -489,12 +851,20 @@ const VueEditorPlane = defineComponent({
       name: "OpenPencilCanvas",
       props: {
         interactive: { type: Boolean, default: false },
+        autoFit: { type: Boolean, default: false },
       },
-      setup(componentProps: { interactive: boolean }) {
+      setup(componentProps: { interactive: boolean; autoFit: boolean }) {
         const canvasRef = ref<HTMLCanvasElement | null>(null);
         const canvasSurface = useCanvas(canvasRef, editor, {
           showRulers: false,
-          onReady: () => editor.zoomToFit(),
+          onReady: () => {
+            if (componentProps.autoFit) {
+              visibleCanvasElement = canvasRef.value;
+              fitCardOverview(canvasRef.value);
+            }
+            resolveRendererReady?.();
+            resolveRendererReady = undefined;
+          },
         });
         if (componentProps.interactive) {
           useCanvasInput(
@@ -509,6 +879,7 @@ const VueEditorPlane = defineComponent({
         return () => h("canvas", {
           ref: (element: Element | ComponentPublicInstance | null) => {
             canvasRef.value = element as HTMLCanvasElement | null;
+            if (componentProps.autoFit && canvasRef.value) visibleCanvasElement = canvasRef.value;
           },
           class: "open-pencil-surface",
           tabindex: componentProps.interactive ? "0" : "-1",
@@ -526,23 +897,46 @@ const VueEditorPlane = defineComponent({
     });
 
     async function finishToReview() {
-      if (!exportedImage.value) {
-        const definition = browserToolDefs.get("export_image");
-        if (definition) {
-          try {
-            if (editor.renderer) figma.setRenderer(editor.renderer);
-            const result = await definition.execute(figma, { format: "PNG", scale: 1 }) as { base64?: string; mimeType?: string };
-            if (result.base64) exportedImage.value = `data:${result.mimeType ?? "image/png"};base64,${result.base64}`;
-          } catch (error) {
-            agentError.value = error instanceof Error ? error.message : String(error);
-          }
-        }
+      const validation = validateCarousel();
+      if (!validation.ok) {
+        agentError.value = validation.errors.join(" · ");
+        currentReasoning.value = `최종 검증 실패: ${agentError.value}`;
+        pushAgentEvent("status", "최종 검증 실패", agentError.value);
+        return;
       }
-      props.onFinish({ imageDataUrl: exportedImage.value ?? undefined });
+      try {
+        await ensureCarouselExports();
+      } catch (error) {
+        agentError.value = error instanceof Error ? error.message : String(error);
+        currentReasoning.value = `최종 이미지 생성 실패: ${agentError.value}`;
+        pushAgentEvent("status", "최종 이미지 생성 실패", agentError.value);
+        return;
+      }
+      const output = finalAgentOutput.value;
+      const slides = cardRootIds.map((nodeId, index) => {
+        const metadata = output?.slides?.find((slide) => slide.nodeId === nodeId)
+          ?? output?.slides?.[index];
+        return {
+          index,
+          nodeId,
+          eyebrow: `${String(index + 1).padStart(2, "0")} / ${cardCount}`,
+          title: metadata?.title?.trim() || props.ideaSlides[index] || props.ideaTitle,
+          copy: metadata?.copy?.trim() || (index === 0 ? props.ideaHook : props.ideaDescription),
+          assetIds: metadata?.assetIds ?? output?.cardRoots?.[index]?.assetIds ?? [],
+          imageDataUrl: exportedCardImages.value[index],
+        };
+      });
+      props.onFinish({
+        slides,
+        caption: output?.caption?.trim() || `${props.ideaTitle}\n\n${props.ideaHook}`,
+        contactSheetImageUrl: exportedImage.value ?? undefined,
+        summary: output?.summary,
+      });
     }
 
     onMounted(async () => {
       await hydrateUserAssets();
+      await rendererReady;
       void startAgent();
     });
 
@@ -554,6 +948,7 @@ const VueEditorPlane = defineComponent({
       if (nextMode === "live" && isComplete.value) return;
       if (nextMode === "review" && !isComplete.value) return;
       mode.value = nextMode;
+      if (nextMode === "live" || nextMode === "review") scheduleCardOverviewFit();
       if (agentSessionId.value) {
         void fetch(`/api/editor-bridge/${agentSessionId.value}/mode`, {
           method: "PATCH",
@@ -626,11 +1021,11 @@ const VueEditorPlane = defineComponent({
           h("span", { class: "vue-canvas-divider" }),
           actionButton("실행 취소", "↶", () => editor.undoAction(), interactive),
           actionButton("다시 실행", "↷", () => editor.redoAction(), interactive),
-          actionButton("화면에 맞추기", "⌕", () => editor.zoomToFit(), interactive),
+          actionButton("화면에 맞추기", "⌕", () => fitCardOverview(visibleCanvasElement), interactive),
           childText(interactive ? "Review / EDIT" : "Live / READ ONLY", "vue-canvas-zoom"),
         ]),
         h("div", { class: ["open-pencil-surface-host", !interactive && "readonly"] }, [
-          h(OpenPencilCanvas, { interactive }),
+          h(OpenPencilCanvas, { interactive, autoFit: true }),
         ]),
       ]);
     }
@@ -706,8 +1101,9 @@ const VueEditorPlane = defineComponent({
         h("aside", { class: "vue-editor-inspector" }, [
           h("div", { class: "vue-inspector-heading" }, [h("span", { class: "vue-kicker" }, "LIVE EDITING"), h("strong", null, isComplete.value ? "완료" : "작업 중")]),
           h("div", { class: "vue-live-task" }, [h("span", { class: "vue-pulse" }), h("span", null, isComplete.value ? "최종 렌더링을 확인하세요" : `${planSteps.value[currentTask.value < 0 ? 0 : currentTask.value]?.label ?? "편집 계획"}을 진행하고 있어요`)]),
-          h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "자동 편집 중 · 캔버스 읽기 전용")]),
-          h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "LAYERS"), layerRow("headline", "headline / text", "text"), layerRow("main-photo", "main photo / crop", "image"), layerRow("route-map", "route map / image", "image"), layerRow("sticker", "spark / sticker", "shape")]),
+          h("div", { class: "vue-live-lock-note" }, [h("span", null, "◌"), h("span", null, "에이전트 작업 중 · 캔버스 읽기 전용")]),
+          agentStreamView(),
+          h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "CARD ROOTS"), ...cardRootIds.map((_, index) => layerRow(`card-${index + 1}`, `card ${String(index + 1).padStart(2, "0")}`, "shape"))]),
           h("div", { class: "vue-inspector-section" }, [h("div", { class: "vue-inspector-label" }, "ASSETS IN USE"), h("div", { class: "vue-asset-chips" }, (props.ideaAssets as string[]).map((asset) => h("span", { class: "vue-asset-chip" }, asset)))]),
           h("div", { class: "vue-live-foot" }, [h("span", null, agentConnected.value ? "편집 환경 준비 완료" : agentError.value || "편집 준비 중"), h("button", { onClick: () => setMode("review") }, "검토 화면으로 →")]),
         ]),
@@ -750,6 +1146,9 @@ const VueEditorPlane = defineComponent({
     }
 
     return () => h("section", { class: "editor-plane-shell" }, [
+      h("div", { class: "open-pencil-runtime-host", "aria-hidden": "true" }, [
+        h(OpenPencilCanvas, { interactive: false }),
+      ]),
       h("div", { class: "editor-plane-heading" }, [
         h("div", null, [h("div", { class: "vue-kicker" }, "POST EDITOR / 04"), h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")]), h("p", null, `${props.ideaTitle} · ${props.ideaFormat}`)]),
         h("div", { class: "editor-plane-actions" }, [h("button", { class: "vue-back-link", onClick: () => (props.onBack as () => void)() }, "← 아이디어 변경")]),

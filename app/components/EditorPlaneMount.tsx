@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { BrandContext } from "@/lib/onboarding/types";
-import type { Idea } from "@/lib/types";
+import type { EditorPlaneResult, Idea } from "@/lib/types";
 
 type Props = {
   idea: Idea;
@@ -11,7 +11,7 @@ type Props = {
   assetItems: { name: string; dataUrl: string }[];
   brandContext: BrandContext;
   onBack: () => void;
-  onFinish: (result?: { imageDataUrl?: string }) => void;
+  onFinish: (result: EditorPlaneResult) => void;
 };
 
 /**
@@ -47,7 +47,7 @@ export default function EditorPlaneMount({ idea, task, brandText, assetItems, br
         assetItems,
         brandContext,
         onBack: () => callbacksRef.current.onBack(),
-        onFinish: (result?: { imageDataUrl?: string }) => callbacksRef.current.onFinish(result),
+        onFinish: (result: EditorPlaneResult) => callbacksRef.current.onFinish(result),
       });
       vueApp.mount(mountRef.current);
     });
