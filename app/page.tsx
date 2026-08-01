@@ -881,7 +881,7 @@ function Ideas({ ideas, loading, error, ready, currentReasoning, recentSkill, re
       <div className="page-heading">
         <div>
           <div className="content-kicker">CONTENT DIRECTION / 02</div>
-          <h1>두 가지 방향을<br /><em>준비했어요.</em></h1>
+          <h1>두 가지 방향을 <em>준비했어요.</em></h1>
           <p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p>
         </div>
       </div>
@@ -937,7 +937,6 @@ function Ideas({ ideas, loading, error, ready, currentReasoning, recentSkill, re
                 <div className="idea-label">{idea.label}</div>
                 <h2>{idea.title}</h2>
                 <p>{idea.description}</p>
-                <div className="idea-meta"><span>{idea.format}</span><span>{idea.assets.join(" · ")}</span></div>
               </div>
               <div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div>
             </button>

@@ -567,6 +567,8 @@ button { cursor: pointer; }
 .onboarding-form-only > .onboarding-form-intro > span { display: none; }
 .onboarding-form-only > .onboarding-form-intro strong { color: var(--ink); font-size: 30px; line-height: 1.18; letter-spacing: -.055em; }
 .onboarding-form-only > .onboarding-form-intro p { margin: 0; color: #8b95a1; font-size: 17px; line-height: 1.5; }
+.idea-footer .primary-button { background: var(--coral); border-radius: 10px; padding: 15px 22px; box-shadow: 0 3px 10px rgba(49,130,246,.16); }
+.idea-footer .primary-button:hover:not(:disabled) { background: #2878e8; transform: translateY(-1px); box-shadow: 0 5px 14px rgba(49,130,246,.2); }
 .account-summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .account-summary-heading .section-label { display: block; }
 .account-summary-heading h2 { margin: 13px 0 0; color: var(--ink); font-size: 24px; letter-spacing: -.04em; }
