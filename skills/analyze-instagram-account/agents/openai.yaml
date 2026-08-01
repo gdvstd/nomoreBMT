@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Instagram Account"
+  short_description: "Audit owned Instagram posts with evidence"
+  default_prompt: "Use $analyze-instagram-account to audit my existing Instagram posts and prepare editor context."
