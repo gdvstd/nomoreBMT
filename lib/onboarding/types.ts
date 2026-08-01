@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { EditorAgentContext } from "@/lib/marketing-context";
 
 export const onboardingAnswersSchema = z.object({
   accountName: z.string().trim().min(1, "계정 이름을 입력해주세요").max(80),
@@ -35,6 +36,11 @@ export const brandContextSchema = generatedBrandProfileSchema.extend({
   accountName: z.string(),
   instagramHandle: z.string(),
   generatedAt: z.string(),
+  /**
+   * Evidence-linked audit of the connected, owned Instagram account. It is
+   * optional to keep previously saved onboarding profiles readable.
+   */
+  ownedAccountContext: z.custom<EditorAgentContext>().optional(),
 });
 
 export const storedOnboardingProfileSchema = z.object({
@@ -75,5 +81,15 @@ export function brandContextToAgentText(context: BrandContext | null): string {
     `Visual direction: ${context.visualGuidelines.join(" / ")}`,
     `Keep: ${context.keepRules.join(" / ")}`,
     `Avoid: ${context.avoidRules.join(" / ")}`,
+    ...(context.ownedAccountContext
+      ? [
+          `Owned account: @${context.ownedAccountContext.account.username}`,
+          `Existing-account weaknesses: ${context.ownedAccountContext.analysis.performanceSummary.weakPatterns.map((item) => item.finding).join(" / ") || "No evidence-backed weak pattern identified"}`,
+          `Existing-account visual fixes: ${context.ownedAccountContext.analysis.visualAnalysis.priorityFixes.join(" / ") || "No priority fix identified"}`,
+          `Owned-account do more: ${context.ownedAccountContext.analysis.editorContext.doMore.join(" / ")}`,
+          `Owned-account avoid: ${context.ownedAccountContext.analysis.editorContext.avoid.join(" / ")}`,
+          `Owned-account limitations: ${context.ownedAccountContext.analysis.dataQuality.limitations.join(" / ") || "None reported"}`,
+        ]
+      : []),
   ].join("\n");
 }

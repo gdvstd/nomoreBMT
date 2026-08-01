@@ -7,6 +7,7 @@ import {
 
 type OpenAIResponse = {
   status?: string;
+  incomplete_details?: { reason?: string };
   output_text?: string;
   output?: Array<{
     type?: string;
@@ -33,6 +34,25 @@ function extractOutputText(response: OpenAIResponse) {
     }
   }
   throw new OpenAIAnalysisError("OpenAI response did not contain structured output.");
+}
+
+function parseStructuredAnalysis(response: OpenAIResponse) {
+  if (response.status === "incomplete") {
+    throw new OpenAIAnalysisError(
+      `OpenAI 계정 분석 출력이 완료되지 않았어요${response.incomplete_details?.reason ? ` (${response.incomplete_details.reason})` : ""}.`,
+    502,
+    );
+  }
+
+  const outputText = extractOutputText(response);
+  try {
+    return JSON.parse(outputText) as ModelMarketingAnalysis;
+  } catch {
+    throw new OpenAIAnalysisError(
+      "OpenAI 계정 분석의 구조화 출력이 완전한 JSON이 아니에요. 분석 범위를 줄이거나 다시 시도해주세요.",
+      502,
+    );
+  }
 }
 
 function compactDataset(dataset: InstagramDataset, analysis: DeterministicAnalysis) {
@@ -146,6 +166,7 @@ export async function generateMarketingContext(
             "댓글 작성자 신원은 추론하지 않는다.",
             "데이터가 부족하면 limitation에 명시하고 confidence를 낮춘다.",
             "출력은 한국어로 작성하되 ID와 metric 이름은 원문을 유지한다.",
+            "출력은 간결하게 작성한다. winningPatterns와 weakPatterns는 각각 최대 3개, commentThemes는 최대 5개, visualAnalysis.slides와 carousels는 가장 중요한 근거만 최대 8개씩 작성한다.",
           ].join("\n"),
         },
         {
@@ -169,7 +190,7 @@ export async function generateMarketingContext(
         },
       ],
       text: {
-        verbosity: "medium",
+        verbosity: "low",
         format: {
           type: "json_schema",
           name: "instagram_marketing_context",
@@ -177,7 +198,7 @@ export async function generateMarketingContext(
           schema: marketingContextJsonSchema,
         },
       },
-      max_output_tokens: 6_000,
+      max_output_tokens: 12_000,
       store: false,
     }),
     cache: "no-store",
@@ -192,5 +213,5 @@ export async function generateMarketingContext(
     );
   }
 
-  return JSON.parse(extractOutputText(payload)) as ModelMarketingAnalysis;
+  return parseStructuredAnalysis(payload);
 }

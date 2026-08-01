@@ -98,6 +98,14 @@ discovery. Keep its real value only in `.env.local` and never prefix it with
 the numeric account ID from the access token. App ID and App Secret are reserved
 for the OAuth connection flow.
 
+When onboarding is saved, the app also analyzes the recent 12 posts and up to
+20 comments per post from the connected owned account. The evidence-linked
+result is saved inside `brandContext.ownedAccountContext`, so Marketer and
+Editor receive the account's weak patterns, visual priority fixes, reusable
+patterns, limitations, and post IDs with the usual onboarding context. The
+submitted Instagram ID must match the account resolved by the configured token;
+the app refuses to attach another account's analysis.
+
 Automatic publishing uses the Instagram API with Instagram Login. The token
 must belong to a Professional (Business or Creator) account and include
 `instagram_business_basic` and `instagram_business_content_publish`. Meta must

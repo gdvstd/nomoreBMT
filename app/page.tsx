@@ -745,7 +745,7 @@ function Onboarding({
         <label className={`qa-field ${showRequired && !answers.mainTopics.trim() ? "missing" : ""}`} htmlFor="mainTopics"><span>주로 어떤 주제를 다루시나요? <b>*</b></span><textarea id="mainTopics" aria-invalid={showRequired && !answers.mainTopics.trim()} value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집" maxLength={500} /><small className={showRequired && !answers.mainTopics.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         <label className={`qa-field ${showRequired && !answers.preferredFormats.trim() ? "missing" : ""}`} htmlFor="preferredFormats"><span>유지하고 싶은 format이 있나요? <b>*</b></span><textarea id="preferredFormats" aria-invalid={showRequired && !answers.preferredFormats.trim()} value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 정도의 카드뉴스, 비속어는 사용하지 않기" maxLength={500} /><small className={showRequired && !answers.preferredFormats.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         {error && <div className="onboarding-error"><span>!</span>{error}</div>}
-        <button className="primary-button onboarding-submit" disabled={loading} type="submit">{loading ? "브랜드 컨텍스트 만드는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
+        <button className="primary-button onboarding-submit" disabled={loading} type="submit">{loading ? "브랜드와 기존 게시물을 분석하는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
       </form>
     </div>
   </div>;
