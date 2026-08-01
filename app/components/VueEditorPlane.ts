@@ -1180,6 +1180,25 @@ const VueEditorPlane = defineComponent({
       ]);
     }
 
+    function agentRunRow(label: string, value: string, icon: string) {
+      const content = [
+        h("span", { class: "vue-agent-run-icon" }, icon),
+        h("div", null, [
+          h("span", { class: "vue-agent-run-label" }, label),
+          h("strong", null, value),
+        ]),
+      ];
+      if (value.length <= 90) return h("div", { class: "vue-agent-run-row" }, content);
+
+      return h("details", { class: "vue-agent-run-details" }, [
+        h("summary", { class: "vue-agent-run-row" }, [
+          ...content,
+          h("span", { class: "vue-agent-run-toggle", "aria-hidden": "true" }, "⌄"),
+        ]),
+        h("p", { class: "vue-agent-run-expanded" }, value),
+      ]);
+    }
+
     function canvas() {
       const interactive = false;
       return h("div", { class: "vue-canvas-wrap" }, [
@@ -1231,14 +1250,8 @@ const VueEditorPlane = defineComponent({
           agentTraceId.value ? h("small", { title: agentTraceId.value }, `TRACE ${agentTraceId.value.slice(-10)}`) : null,
         ]),
         h("div", { class: "vue-agent-run-summary" }, [
-          h("div", { class: "vue-agent-run-row" }, [
-            h("span", { class: "vue-agent-run-icon" }, "✦"),
-            h("div", null, [h("span", { class: "vue-agent-run-label" }, "CURRENT REASONING"), h("strong", { class: "vue-agent-stream-current" }, currentReasoning.value || currentStep?.detail || "에이전트가 작업 순서를 준비하고 있어요.")]),
-          ]),
-          h("div", { class: "vue-agent-run-row" }, [
-            h("span", { class: "vue-agent-run-icon" }, "⌁"),
-            h("div", null, [h("span", { class: "vue-agent-run-label" }, "MOST RECENT TOOL"), h("strong", null, recentTool.value)]),
-          ]),
+          agentRunRow("CURRENT REASONING", currentReasoning.value || currentStep?.detail || "에이전트가 작업 순서를 준비하고 있어요.", "✦"),
+          agentRunRow("MOST RECENT TOOL", recentTool.value, "⌁"),
         ]),
         h("details", { class: "vue-agent-event-details" }, [
           h("summary", null, [h("span", null, "전체 reasoning · tool 로그"), h("small", null, `${agentEventLog.value.length} events`)]),
