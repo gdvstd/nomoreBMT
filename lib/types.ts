@@ -15,7 +15,30 @@ export type Idea = {
 
 export type RenderedPost = {
   ideaId: string;
-  slides: { eyebrow: string; title: string; copy: string; gradient: string }[];
+  slides: {
+    nodeId?: string;
+    eyebrow: string;
+    title: string;
+    copy: string;
+    gradient: string;
+    assetIds?: string[];
+    imageDataUrl?: string;
+  }[];
   caption: string;
   previewImageUrl?: string;
+};
+
+export type EditorPlaneResult = {
+  slides: Array<{
+    index: number;
+    nodeId: string;
+    eyebrow: string;
+    title: string;
+    copy: string;
+    assetIds: string[];
+    imageDataUrl: string;
+  }>;
+  caption: string;
+  contactSheetImageUrl?: string;
+  summary?: string;
 };

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Idea } from "@/lib/types";
+import type { EditorPlaneResult, Idea } from "@/lib/types";
 
 type Props = {
   idea: Idea;
@@ -9,7 +9,7 @@ type Props = {
   brandText: string;
   assetItems: { name: string; dataUrl: string }[];
   onBack: () => void;
-  onFinish: (result?: { imageDataUrl?: string }) => void;
+  onFinish: (result: EditorPlaneResult) => void;
 };
 
 /**
@@ -44,7 +44,7 @@ export default function EditorPlaneMount({ idea, task, brandText, assetItems, on
         brandText,
         assetItems,
         onBack: () => callbacksRef.current.onBack(),
-        onFinish: (result?: { imageDataUrl?: string }) => callbacksRef.current.onFinish(result),
+        onFinish: (result: EditorPlaneResult) => callbacksRef.current.onFinish(result),
       });
       vueApp.mount(mountRef.current);
     });

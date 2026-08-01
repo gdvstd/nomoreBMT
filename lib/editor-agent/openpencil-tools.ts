@@ -15,6 +15,8 @@ import type {
 
 const EXPORT_IMAGE_TOOL_NAME = "export_image";
 const SET_IMAGE_FILL_TOOL_NAME = "set_image_fill";
+const CLONE_NODE_TOOL_NAME = "clone_node";
+const VALIDATE_CAROUSEL_TOOL_NAME = "validate_carousel";
 
 const progressArgsSchema = z.object({
   phase: z.enum(["plan", "step_started", "step_completed", "blocked", "workflow_completed"]),
@@ -92,6 +94,53 @@ export function createProgressReportTool() {
 }
 
 /**
+ * Product-level completion gate. OpenPencil remains responsible for document
+ * mutations; this read-only tool asks the browser-owned graph to verify the
+ * carousel invariants after the final mutation.
+ */
+export function createCarouselValidationTool() {
+  return tool({
+    name: VALIDATE_CAROUSEL_TOOL_NAME,
+    description: "Validate that every carousel card is a separate 1080x1350 frame, does not overlap another card, contains visual children, and contains a user image when assets were supplied. Call after the final mutation and repair every returned error before completing.",
+    parameters: z.object({}).strict(),
+    strict: true,
+    execute: async (
+      args: Record<string, never>,
+      context?: RunContext<EditorAgentRunContext>,
+    ) => {
+      const runContext = getRunContext(context);
+      runContext.onEvent?.({ type: "tool_started", toolName: VALIDATE_CAROUSEL_TOOL_NAME, args });
+
+      try {
+        const response = await runContext.bridge.invoke({
+          runId: runContext.runId,
+          toolName: VALIDATE_CAROUSEL_TOOL_NAME,
+          args,
+          expectedRevision: runContext.graphRevision,
+        });
+        runContext.graphRevision = response.graphRevision ?? runContext.graphRevision;
+        if (isRecord(response.result) && typeof response.result.error === "string") {
+          throw new Error(response.result.error);
+        }
+        runContext.validationPassed = isRecord(response.result) && response.result.ok === true;
+        runContext.onEvent?.({
+          type: "tool_finished",
+          toolName: VALIDATE_CAROUSEL_TOOL_NAME,
+          result: response.result,
+          graphRevision: runContext.graphRevision,
+        });
+        return response.result;
+      } catch (error) {
+        runContext.validationPassed = false;
+        const message = error instanceof Error ? error.message : String(error);
+        runContext.onEvent?.({ type: "tool_failed", toolName: VALIDATE_CAROUSEL_TOOL_NAME, error: message });
+        throw error;
+      }
+    },
+  });
+}
+
+/**
  * Convert OpenPencil's canonical parameter description into a strict Zod
  * object. Defaults are intentionally not copied into the schema: OpenPencil's
  * own execute functions remain responsible for applying their defaults.
@@ -145,8 +194,9 @@ export function getOpenPencilToolDefs(options?: {
   const core = [...CORE_TOOLS];
   const exportImage = ALL_TOOLS.find((candidate) => candidate.name === EXPORT_IMAGE_TOOL_NAME);
   const setImageFill = ALL_TOOLS.find((candidate) => candidate.name === SET_IMAGE_FILL_TOOL_NAME);
+  const cloneNode = ALL_TOOLS.find((candidate) => candidate.name === CLONE_NODE_TOOL_NAME);
   const defs = [...core];
-  for (const definition of [setImageFill, exportImage]) {
+  for (const definition of [cloneNode, setImageFill, exportImage]) {
     if (definition && !defs.some((candidate) => candidate.name === definition.name)) defs.push(definition);
   }
 
@@ -218,6 +268,7 @@ export function openPencilToolToAgentTool(definition: ToolDef) {
       }
 
       runContext.onEvent?.({ type: "tool_started", toolName: definition.name, args });
+      if (definition.mutates) runContext.validationPassed = false;
 
       try {
         const response: OpenPencilToolResult = await runContext.bridge.invoke({
@@ -228,6 +279,9 @@ export function openPencilToolToAgentTool(definition: ToolDef) {
         });
 
         runContext.graphRevision = response.graphRevision ?? runContext.graphRevision;
+        if (isRecord(response.result) && typeof response.result.error === "string") {
+          throw new Error(response.result.error);
+        }
         const result = definition.name === EXPORT_IMAGE_TOOL_NAME
           ? toAgentToolOutput(response.result)
           : response.result;
@@ -264,7 +318,11 @@ export function createOpenPencilAgentTools(options?: {
   const definitions = options?.toolDefs ?? getOpenPencilToolDefs({
     includeUnsafe: options?.includeUnsafe,
   });
-  return [createProgressReportTool(), ...definitions.map(openPencilToolToAgentTool)];
+  return [
+    createProgressReportTool(),
+    createCarouselValidationTool(),
+    ...definitions.map(openPencilToolToAgentTool),
+  ];
 }
 
 /** Execute canonical OpenPencil tools directly against a browser-owned FigmaAPI. */

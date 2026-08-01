@@ -2,8 +2,8 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
-import type { Idea, RenderedPost, Screen } from "@/lib/types";
+import { mockIdeas } from "@/lib/mock-agents";
+import type { EditorPlaneResult, Idea, RenderedPost, Screen } from "@/lib/types";
 
 type UploadedAsset = {
   id: string;
@@ -128,7 +128,7 @@ export default function Home() {
 
   function createPost() {
     if (!selectedIdea) return;
-    setRenderedPost(renderMockPost(selectedIdea.id));
+    setRenderedPost(null);
     setActiveSlide(0);
     setScreen("editor");
   }
@@ -352,7 +352,27 @@ export default function Home() {
         )}
 
         {screen === "editor" && selectedIdea && (
-          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result) => { setRenderedPost((post) => post ? { ...post, previewImageUrl: result?.imageDataUrl } : (selectedIdea ? { ...renderMockPost(selectedIdea.id), previewImageUrl: result?.imageDataUrl } : null)); setActiveSlide(0); setScreen("review"); }} />
+          <EditorPlaneMount idea={selectedIdea} task={brief} brandText={brandText} assetItems={files} onBack={() => setScreen("ideas")} onFinish={(result: EditorPlaneResult) => {
+            const gradients = selectedIdea.accent === "coral"
+              ? ["sunset", "seafoam", "sand", "night", "coral"]
+              : ["dawn", "ocean", "cream", "twilight", "blue"];
+            setRenderedPost({
+              ideaId: selectedIdea.id,
+              slides: result.slides.map((slide, index) => ({
+                nodeId: slide.nodeId,
+                eyebrow: slide.eyebrow,
+                title: slide.title,
+                copy: slide.copy,
+                assetIds: slide.assetIds,
+                imageDataUrl: slide.imageDataUrl,
+                gradient: gradients[index % gradients.length],
+              })),
+              caption: result.caption,
+              previewImageUrl: result.contactSheetImageUrl,
+            });
+            setActiveSlide(0);
+            setScreen("review");
+          }} />
         )}
 
         {screen === "review" && renderedPost && (
@@ -469,6 +489,17 @@ function Ideas({ ideas, loading, error, currentReasoning, recentTool, eventLog, 
 
 function Review({ post, activeSlide, setActiveSlide, onBack, onRestart }: { post: RenderedPost; activeSlide: number; setActiveSlide: (value: number) => void; onBack: () => void; onRestart: () => void }) {
   const slide = post.slides[activeSlide];
-  const previewImage = post.previewImageUrl ? <img className="agent-rendered-image" src={post.previewImageUrl} alt="편집자 에이전트 결과" /> : null;
-  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${post.previewImageUrl ? "agent-rendered" : ""}`}>{previewImage}<div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>seoyeon.studio</span><span>✦</span></div></div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={() => window.alert("다운로드 준비가 완료됐어요. (MVP Mock)")}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
+  const previewImageUrl = slide.imageDataUrl ?? post.previewImageUrl;
+
+  function downloadSlides() {
+    post.slides.forEach((item, index) => {
+      if (!item.imageDataUrl) return;
+      const link = document.createElement("a");
+      link.href = item.imageDataUrl;
+      link.download = `bmt-card-${String(index + 1).padStart(2, "0")}.png`;
+      link.click();
+    });
+  }
+
+  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>첫 번째 게시물이<br /><em>완성됐어요.</em></h1><p className="heading-description">마음에 드는지 천천히 살펴보고, 필요한 부분만 다듬어보세요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${previewImageUrl ? "agent-rendered" : ""}`}>{previewImageUrl ? <img className="agent-rendered-image" src={previewImageUrl} alt={`${activeSlide + 1}번째 편집자 에이전트 결과`} /> : <><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>seoyeon.studio</span><span>✦</span></div></>}</div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.nodeId ?? item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><p>{post.caption}</p></div><div className="button-row"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="primary-button" onClick={downloadSlides}>게시물 다운로드 <span>↓</span></button></div><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div></div></div>;
 }

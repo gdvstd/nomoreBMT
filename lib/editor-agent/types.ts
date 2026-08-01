@@ -52,6 +52,8 @@ export const openPencilContextSchema = z.object({
   pageId: z.string().optional(),
   graphRevision: z.string().optional(),
   targetNodeIds: z.array(z.string()).default([]),
+  cardRootIds: z.array(z.string()).default([]),
+  assetNodeIds: z.array(z.string()).default([]),
   canvasWidth: z.number().positive().optional(),
   canvasHeight: z.number().positive().optional(),
 });
@@ -80,6 +82,16 @@ export const editorAgentResultSchema = z.object({
       assetIds: z.array(z.string()).default([]),
     }),
   ).default([]),
+  slides: z.array(
+    z.object({
+      index: z.number().int().nonnegative(),
+      nodeId: z.string(),
+      title: z.string(),
+      copy: z.string(),
+      assetIds: z.array(z.string()).default([]),
+    }),
+  ).default([]),
+  caption: z.string().default(""),
   summary: z.string(),
   warnings: z.array(z.string()).default([]),
   unresolved: z.array(z.string()).default([]),
@@ -150,5 +162,6 @@ export type EditorAgentRunContext = {
   runId: string;
   mode: EditorAgentMode;
   graphRevision?: string;
+  validationPassed?: boolean;
   onEvent?: (event: EditorAgentEvent) => void;
 };
