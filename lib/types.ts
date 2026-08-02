@@ -1,20 +1,15 @@
-import type { EditorInput } from "@/lib/editor-input/types";
+import type {
+  MarketerComplianceCheck,
+  MarketerIdeaCard,
+  MarketerReference,
+} from "@/lib/marketer-agent/types";
 
 export type Screen = "onboarding" | "dashboard" | "brief" | "ideas" | "editor" | "review";
 
-export type Idea = {
-  id: string;
-  label: string;
-  title: string;
-  hook: string;
-  description: string;
-  format: string;
-  assets: string[];
-  assetIds?: string[];
-  referenceAssetIds?: string[];
-  slides: string[];
-  accent: "coral" | "blue";
-};
+/** An idea card now carries a fully-authored slide plan (see MarketerIdeaCard). */
+export type Idea = MarketerIdeaCard;
+export type Reference = MarketerReference;
+export type ComplianceCheck = MarketerComplianceCheck;
 
 export type RenderedPost = {
   ideaId: string;
@@ -35,7 +30,7 @@ export type RenderedPost = {
 export type EditorDiagnostics = {
   plannerTraceId?: string;
   editorTraceId?: string;
-  editorInput: EditorInput;
+  selectedIdea: Idea;
   eventLog: Array<{
     kind: "reasoning" | "tool" | "status";
     label: string;

@@ -21,7 +21,6 @@ export {
   editorAgentResultSchema,
   editorAssetSchema,
   editorDesignPrinciplesSchema,
-  editorIdeaCardSchema,
   editorTaskSchema,
   openPencilContextSchema,
   type EditorAgentInput,

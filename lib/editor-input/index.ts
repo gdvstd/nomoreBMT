@@ -1,9 +1,8 @@
-export { EditorInputGenerationError, generateEditorInput } from "./agent";
 export {
-  editorInputSchema,
-  generateEditorInputRequestSchema,
-  type EditorInput,
-  type EditorInputGenerationAttempt,
-  type EditorInputGenerationResult,
-  type GenerateEditorInputRequest,
+  slideTextItemSchema,
+  referenceInspirationSchema,
+  slidePlanSchema,
+  type SlideTextItem,
+  type ReferenceInspiration,
+  type SlidePlan,
 } from "./types";

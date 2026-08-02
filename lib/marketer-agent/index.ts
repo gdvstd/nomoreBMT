@@ -8,9 +8,13 @@ export {
 export {
   marketerAgentInputSchema,
   marketerAgentOutputSchema,
+  marketerModelOutputSchema,
   marketerAssetSchema,
+  marketerReferenceSchema,
   marketerIdeaCardSchema,
   type MarketerAgentInput,
   type MarketerAgentOutput,
+  type MarketerModelOutput,
+  type MarketerReference,
   type MarketerIdeaCard,
 } from "./types";

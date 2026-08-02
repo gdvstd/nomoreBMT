@@ -1,58 +1,53 @@
 import { z } from "zod";
 
-import { marketerIdeaCardSchema } from "@/lib/marketer-agent/types";
-import { projectAssetSchema } from "@/lib/project-assets/types";
+/**
+ * Shared "content plan" contract authored by the Marketing Agent and consumed
+ * by both the UI provenance panel and the Editor Agent.
+ *
+ * Three layers live here:
+ *  - HARD CONTRACT (machine-validated by validateCarousel + the editor):
+ *    sourceAssetId, imageTreatment, and the text element set.
+ *  - PROVENANCE / GROUNDING (shown in the UI, read by the editor, never
+ *    machine-validated): intent, imageIntent, referenceInspirations.
+ *  - SOFT execution (exact geometry, type size, color, overlays) is decided by
+ *    the Editor Agent at runtime and verified on the rendered graph, so it is
+ *    intentionally absent from this contract.
+ */
 
-export const editorTextItemSchema = z.object({
-  content: z.string(),
-  size: z.number().positive().max(300),
-  color: z.string().min(1),
-  font: z.string().min(1).optional(),
-  description: z.string().min(1),
+/** A single visible text element. The editor authors the exact size/color. */
+export const slideTextItemSchema = z.object({
+  role: z.enum(["hook", "title", "body", "caption", "cta", "label"]),
+  content: z.string().min(1),
 });
 
-export const editorInputSchema = z.object({
-  design: z.object({
-    description: z.string().min(1),
-    referenceImageUrls: z.array(z.string().url()).max(2),
-  }),
-  slides: z
-    .array(
-      z.object({
-        text: z.array(editorTextItemSchema).nullable(),
-        description: z.string().min(1),
-        imageUrl: z.string().url().nullable(),
-        sourceAssetId: z.string().nullable(),
-        imageDescription: z.string().min(1).nullable(),
-      }),
-    )
-    .min(1)
-    .max(20),
+/** How one design reference informed this slide (UI display + editor grounding). */
+export const referenceInspirationSchema = z.object({
+  /** Points at MarketerReference.id supplied to the marketer. */
+  referenceId: z.string(),
+  /** The reusable principle taken from the reference. */
+  borrowed: z.string().min(1),
+  /** How it was adapted to the user's brand/photo, not copied. */
+  adaptedHow: z.string().min(1),
 });
 
-export const generateEditorInputRequestSchema = z.object({
-  taskId: z.string(),
-  request: z.string().min(1),
-  language: z.string().default("ko"),
-  selectedIdea: marketerIdeaCardSchema,
-  brandContext: z.unknown().optional(),
-  userAssets: z.array(projectAssetSchema).min(1).max(9),
-  referenceAssets: z.array(projectAssetSchema).max(2).default([]),
+export const slidePlanSchema = z.object({
+  // ── Hard contract ────────────────────────────────────────────────
+  /** Stable id of the user photo used on this slide. */
+  sourceAssetId: z.string(),
+  /** Replaces the old prose full-bleed regex with an explicit contract. */
+  imageTreatment: z.enum(["full_bleed", "contained"]),
+  /** null = an intentionally text-free slide. */
+  text: z.array(slideTextItemSchema).nullable(),
+
+  // ── Provenance / grounding ───────────────────────────────────────
+  /** Communication goal + relation to the previous/next slide. */
+  intent: z.string().min(1),
+  /** Crop anchor, focal subject, and which region to keep in frame. */
+  imageIntent: z.string().min(1),
+  /** Up to two references that informed this slide. */
+  referenceInspirations: z.array(referenceInspirationSchema).max(2).default([]),
 });
 
-export type EditorInput = z.infer<typeof editorInputSchema>;
-export type GenerateEditorInputRequest = z.infer<
-  typeof generateEditorInputRequestSchema
->;
-
-export type EditorInputGenerationAttempt = {
-  attempt: number;
-  status: "started" | "retrying" | "completed" | "failed";
-  message: string;
-};
-
-export type EditorInputGenerationResult = {
-  editorInput: EditorInput;
-  traceId: string;
-  attempts: EditorInputGenerationAttempt[];
-};
+export type SlideTextItem = z.infer<typeof slideTextItemSchema>;
+export type ReferenceInspiration = z.infer<typeof referenceInspirationSchema>;
+export type SlidePlan = z.infer<typeof slidePlanSchema>;

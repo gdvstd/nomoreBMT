@@ -3,7 +3,6 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { User } from "@supabase/supabase-js";
-import { mockIdeas, renderMockPost } from "@/lib/mock-agents";
 import { AuthScreen } from "@/app/components/AuthScreen";
 import {
   brandContextSchema,
@@ -19,18 +18,12 @@ import {
   type OnboardingStorageResult,
 } from "@/lib/onboarding/storage";
 import {
-  editorInputSchema,
-  type EditorInput,
-  type EditorInputGenerationAttempt,
-} from "@/lib/editor-input/types";
-import {
   uploadRenderedProjectAssets,
   uploadUserProjectAssets,
 } from "@/lib/project-assets/browser";
 import type { ProjectAsset } from "@/lib/project-assets/types";
-import type { InstagramReferenceContext } from "@/lib/reference-scout/schema";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
-import type { EditorPlaneResult, Idea, RenderedPost, Screen } from "@/lib/types";
+import type { ComplianceCheck, EditorPlaneResult, Idea, Reference, RenderedPost, Screen } from "@/lib/types";
 
 type UploadedAsset = {
   id: string;
@@ -39,21 +32,6 @@ type UploadedAsset = {
   description: string;
   dataUrl: string;
   file: File;
-};
-
-type ReferenceAssetCandidate = {
-  assetId: string;
-  imageUrl: string;
-  instagramUrl: string;
-  sourceSlideIndex: number;
-  designNotes: string[];
-};
-
-type ReferenceLinkCandidate = {
-  assetId: string;
-  instagramUrl: string;
-  rank: number;
-  creatorHandle: string | null;
 };
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -118,15 +96,12 @@ export default function Home() {
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [activeProjectId, setActiveProjectId] = useState("");
   const [storedUserAssets, setStoredUserAssets] = useState<ProjectAsset[]>([]);
-  const [referenceAssets, setReferenceAssets] = useState<
-    ReferenceAssetCandidate[]
-  >([]);
-  const [referenceLinks, setReferenceLinks] = useState<ReferenceLinkCandidate[]>([]);
-  const [editorInput, setEditorInput] = useState<EditorInput | null>(null);
+  /** Marketer-authored references (provenance + editor design evidence). */
+  const [references, setReferences] = useState<Reference[]>([]);
+  /** Server-computed proof the marketer followed its assigned procedure. */
+  const [marketerCompliance, setMarketerCompliance] = useState<ComplianceCheck[]>([]);
   const [editorInputLoading, setEditorInputLoading] = useState(false);
   const [editorInputStatus, setEditorInputStatus] = useState("선택한 방향을 편집 지시로 바꿀 준비가 됐어요.");
-  const [editorInputTraceId, setEditorInputTraceId] = useState("");
-  const [editorInputAttempts, setEditorInputAttempts] = useState<EditorInputGenerationAttempt[]>([]);
   const [renderedPost, setRenderedPost] = useState<RenderedPost | null>(null);
   const [activeSlide, setActiveSlide] = useState(0);
   const marketerStream = useRef<EventSource | null>(null);
@@ -178,6 +153,24 @@ export default function Home() {
   }, [screen]);
 
   const brandText = useMemo(() => brandContextToAgentText(brandContext), [brandContext]);
+  // Stable identities for the editor plane props. Without memoization these
+  // arrays are recreated every render, so any parent re-render would remount
+  // the Vue editor and restart the running agent back to 0%.
+  const editorAssetItems = useMemo(
+    () => files.map((file) => ({
+      assetId: file.id,
+      name: file.name,
+      dataUrl: file.dataUrl,
+      url: storedUserAssets.find((asset) => asset.assetId === file.id)?.signedUrl,
+    })),
+    [files, storedUserAssets],
+  );
+  const editorReferences = useMemo(
+    () => (selectedIdea
+      ? references.filter((reference) => selectedIdea.referenceIds.includes(reference.id))
+      : []),
+    [references, selectedIdea],
+  );
   const currentStep = steps.findIndex((step) => step.id === screen);
   const profileSummary = useMemo(() => {
     if (!brandContext) return "아직 브랜드 방향을 입력하지 않았어요";
@@ -304,10 +297,7 @@ export default function Home() {
   function chooseIdea(idea: Idea) {
     setSelectedIdea(idea);
     setRenderedPost(null);
-    setEditorInput(null);
-    setEditorInputTraceId("");
-    setEditorInputAttempts([]);
-    setEditorInputStatus("선택한 방향을 편집 지시로 바꿀 준비가 됐어요.");
+    setEditorInputStatus("선택한 방향을 편집 화면으로 넘길 준비가 됐어요.");
   }
 
   async function createPost() {
@@ -318,91 +308,14 @@ export default function Home() {
       );
       return;
     }
-    setEditorInputLoading(true);
-    setEditorInputStatus("디자인 레퍼런스와 사용자 사진을 준비하고 있어요.");
-    setEditorInputTraceId("");
-    setEditorInputAttempts([]);
+    // The marketer already authored a complete slide plan per idea, so there is
+    // no separate EditorInput planner call. Hand the selected plan straight to
+    // the editor plane.
     setIdeasError("");
-
-    try {
-      const selectedReferenceIds = new Set(
-        (selectedIdea.referenceAssetIds ?? []).slice(0, 2),
-      );
-      const selectedReferences = referenceAssets.filter((asset) =>
-        selectedReferenceIds.has(asset.assetId),
-      ).slice(0, 2);
-
-      let storedReferenceAssets: ProjectAsset[] = [];
-      if (selectedReferences.length) {
-        setEditorInputStatus("선택한 디자인 레퍼런스를 프로젝트에 연결하고 있어요.");
-        const referenceResponse = await fetch(
-          `/api/projects/${activeProjectId}/assets/references`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: selectedReferences }),
-          },
-        );
-        const referencePayload = await referenceResponse.json() as {
-          assets?: ProjectAsset[];
-          error?: string;
-          detail?: string;
-        };
-        if (!referenceResponse.ok || !referencePayload.assets) {
-          throw new Error(
-            referencePayload.detail ??
-            referencePayload.error ??
-            "Reference 이미지를 저장하지 못했어요.",
-          );
-        }
-        storedReferenceAssets = referencePayload.assets;
-      }
-
-      setEditorInputStatus("EditorInput Planner가 슬라이드별 사진·카피·구성을 설계하고 있어요.");
-      const inputResponse = await fetch(
-        `/api/projects/${activeProjectId}/editor/input`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            request: brief,
-            language: "ko",
-            selectedIdea,
-            brandContext,
-            userAssets: storedUserAssets,
-            referenceAssets: storedReferenceAssets,
-          }),
-        },
-      );
-      const inputPayload = await inputResponse.json() as {
-        editorInput?: unknown;
-        error?: string;
-        detail?: string;
-        traceId?: string;
-        attempts?: EditorInputGenerationAttempt[];
-      };
-      setEditorInputTraceId(inputPayload.traceId ?? "");
-      setEditorInputAttempts(inputPayload.attempts ?? []);
-      if (!inputResponse.ok || !inputPayload.editorInput) {
-        throw new Error(
-          inputPayload.detail ??
-          inputPayload.error ??
-          "Editor instruction을 만들지 못했어요.",
-        );
-      }
-
-      setEditorInput(editorInputSchema.parse(inputPayload.editorInput));
-      setEditorInputStatus("구조화된 편집 지시가 준비됐어요.");
-      setRenderedPost(renderMockPost(selectedIdea.id));
-      setActiveSlide(0);
-      setScreen("editor");
-    } catch (error) {
-      setIdeasError(
-        error instanceof Error ? error.message : "Editor instruction 생성에 실패했어요.",
-      );
-    } finally {
-      setEditorInputLoading(false);
-    }
+    setEditorInputStatus("선택한 슬라이드 플랜을 편집 화면으로 전달하고 있어요.");
+    setRenderedPost(null);
+    setActiveSlide(0);
+    setScreen("editor");
   }
 
   async function generateIdeas() {
@@ -419,109 +332,42 @@ export default function Home() {
     setIdeas([]);
     setSelectedIdea(null);
     setStoredUserAssets([]);
-    setReferenceAssets([]);
-    setReferenceLinks([]);
-    setEditorInputTraceId("");
-    setEditorInputAttempts([]);
-    setEditorInputStatus("선택한 방향을 편집 지시로 바꿀 준비가 됐어요.");
+    setReferences([]);
+    setMarketerCompliance([]);
+    setEditorInputStatus("선택한 방향을 편집 화면으로 넘길 준비가 됐어요.");
     setScreen("ideas");
 
     try {
       const projectId = crypto.randomUUID();
       setActiveProjectId(projectId);
-      setEditorInput(null);
 
-      const scoutingMessage = "사진을 정리하면서 비슷한 Instagram 디자인 레퍼런스를 찾고 있어요.";
-      setIdeasCurrentReasoning(scoutingMessage);
-      setIdeasRecentSkill("scout-instagram-references 실행 중");
-      setIdeasRecentTool("asset_upload · reference_search 실행 중");
+      const uploadingMessage = "업로드한 사진을 정리하고 있어요. 곧 마케팅 에이전트가 레퍼런스를 조사합니다.";
+      setIdeasCurrentReasoning(uploadingMessage);
+      setIdeasRecentSkill("asset_upload 실행 중");
+      setIdeasRecentTool("scout-instagram-references 대기 중");
       setIdeasEventLog((previous) => [
-        { id: `${Date.now()}-skill-start`, kind: "skill" as const, label: "scout-instagram-references", detail: "유사한 공개 Instagram 캐러셀 레퍼런스 탐색" },
-        { id: `${Date.now()}-pipeline-start`, kind: "tool" as const, label: "asset_upload · reference_search", detail: "병렬 실행 시작" },
-        { id: `${Date.now()}-reasoning-start`, kind: "reasoning" as const, label: scoutingMessage },
         ...previous,
-      ].slice(0, 40));
+        { id: `${Date.now()}-upload-start`, kind: "tool" as const, label: "asset_upload", detail: "사용자 사진 업로드 시작" },
+        { id: `${Date.now()}-reasoning-start`, kind: "reasoning" as const, label: uploadingMessage },
+      ].slice(-40));
 
-      const referenceRequest = fetch("/api/instagram/references", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          topic: brief,
-          objective: "저장",
-          timeRange: "30d",
-          region: "KR",
-          formatFocus: "carousel",
-          maxReferences: 3,
-        }),
-      })
-        .then(async (referenceResponse) => {
-          const payload = await referenceResponse.json() as {
-            context?: InstagramReferenceContext;
-          };
-          return referenceResponse.ok ? payload.context ?? null : null;
-        })
-        .catch(() => null);
-
-      const [uploadedAssets, referenceContext] = await Promise.all([
-        uploadUserProjectAssets(
-          projectId,
-          files.map((file) => ({
-            assetId: file.id,
-            file: file.file,
-            description: file.description,
-          })),
-        ),
-        referenceRequest,
-      ]);
+      const uploadedAssets = await uploadUserProjectAssets(
+        projectId,
+        files.map((file) => ({
+          assetId: file.id,
+          file: file.file,
+          description: file.description,
+        })),
+      );
       setStoredUserAssets(uploadedAssets);
 
-      const discoveredReferenceLinks: ReferenceLinkCandidate[] = referenceContext
-        ? [
-            ...referenceContext.references.map((reference) => ({
-              assetId: `reference-link-${reference.rank}`,
-              instagramUrl: reference.instagramUrl,
-              rank: reference.rank,
-              creatorHandle: reference.creatorHandle,
-            })),
-            ...referenceContext.patterns.flatMap((pattern, patternIndex) =>
-              pattern.evidenceReferenceUrls.map((instagramUrl, urlIndex) => ({
-                assetId: `pattern-link-${patternIndex + 1}-${urlIndex + 1}`,
-                instagramUrl,
-                rank: referenceContext.references.length + patternIndex + 1,
-                creatorHandle: null,
-              })),
-            ),
-          ].filter((reference, index, all) => (
-            Boolean(reference.instagramUrl) &&
-            all.findIndex((candidate) => candidate.instagramUrl === reference.instagramUrl) === index
-          )).slice(0, 6)
-        : [];
-      setReferenceLinks(discoveredReferenceLinks);
-
-      const discoveredReferences: ReferenceAssetCandidate[] =
-        referenceContext?.references.flatMap((reference) =>
-          (reference.previewImageUrls ?? []).slice(0, 2).map(
-            (imageUrl, index) => ({
-              assetId: `reference-${reference.rank}-${index + 1}`,
-              imageUrl,
-              instagramUrl: reference.instagramUrl,
-              sourceSlideIndex: index + 1,
-              designNotes: reference.creativeAnalysis.visualPatterns,
-            }),
-          ),
-        ).slice(0, 6) ?? [];
-      setReferenceAssets(discoveredReferences);
-      const referenceSummary = discoveredReferences.length
-        ? `${discoveredReferences.length}개의 디자인 reference 이미지를 찾았어요.`
-        : "사용 가능한 reference 없이 사용자 사진과 브랜드 방향만으로 진행해요.";
-      setIdeasRecentSkill(`scout-instagram-references 완료 · ${discoveredReferences.length} refs`);
-      setIdeasRecentTool(`asset_upload 완료 · ${uploadedAssets.length} photos`);
-      setIdeasCurrentReasoning("브랜드 방향과 사진을 비교해 서로 다른 두 가지 콘텐츠 방향을 구성하고 있어요.");
+      setIdeasRecentSkill(`asset_upload 완료 · ${uploadedAssets.length} photos`);
+      setIdeasRecentTool("scout-instagram-references 준비 중");
+      setIdeasCurrentReasoning("마케팅 에이전트가 조사 주제를 정하고 레퍼런스를 찾은 뒤 두 방향을 구성해요.");
       setIdeasEventLog((previous) => [
-        { id: `${Date.now()}-skill-finish`, kind: "skill" as const, label: "scout-instagram-references 완료", detail: referenceSummary },
-        { id: `${Date.now()}-upload-finish`, kind: "tool" as const, label: "asset_upload 완료", detail: `${uploadedAssets.length}개 사용자 사진 준비` },
         ...previous,
-      ].slice(0, 40));
+        { id: `${Date.now()}-upload-finish`, kind: "tool" as const, label: "asset_upload 완료", detail: `${uploadedAssets.length}개 사용자 사진 준비` },
+      ].slice(-40));
 
       const response = await fetch(`/api/projects/${projectId}/ideas`, {
         method: "POST",
@@ -543,9 +389,6 @@ export default function Home() {
               description: asset.description,
             })),
           },
-          references: discoveredReferences.length
-            ? { items: discoveredReferences }
-            : undefined,
         }),
       });
 
@@ -578,7 +421,9 @@ export default function Home() {
             message?: string;
             text?: string;
             toolName?: string;
-            ideas?: Idea[];
+            args?: Record<string, unknown>;
+            resultSummary?: string;
+            output?: { ideas: Idea[]; references: Reference[]; compliance: ComplianceCheck[] };
             traceId?: string;
           };
         };
@@ -590,49 +435,67 @@ export default function Home() {
         }
         if (agentEvent.type === "reasoning_update" && agentEvent.message) {
           setIdeasCurrentReasoning(agentEvent.message);
-          setIdeasEventLog((previous) => [{
+          setIdeasEventLog((previous) => [...previous, {
             id: `${Date.now()}-${previous.length}`,
             kind: "reasoning" as const,
             label: agentEvent.message!,
-          }, ...previous].slice(0, 40));
+          }].slice(-40));
         }
         if (agentEvent.type === "status" && agentEvent.message) {
           setIdeasCurrentReasoning(agentEvent.message);
-          setIdeasEventLog((previous) => [{
+          setIdeasEventLog((previous) => [...previous, {
             id: `${Date.now()}-${previous.length}`,
             kind: (agentEvent.status === "failed" ? "status" : "reasoning") as AgentLogEntry["kind"],
             label: agentEvent.message!,
             detail: agentEvent.status,
-          }, ...previous].slice(0, 40));
+          }].slice(-40));
+        }
+        if (agentEvent.type === "tool_progress" && agentEvent.toolName && agentEvent.message) {
+          setIdeasRecentTool(`${agentEvent.toolName} · 진행 중`);
+          setIdeasCurrentReasoning(agentEvent.message);
+          setIdeasEventLog((previous) => [...previous, {
+            id: `${Date.now()}-${previous.length}`,
+            kind: "tool" as const,
+            label: `${agentEvent.toolName} 진행`,
+            detail: agentEvent.message,
+          }].slice(-40));
         }
         if (agentEvent.type === "tool_started" && agentEvent.toolName) {
           setIdeasRecentTool(`${agentEvent.toolName} 실행 중`);
-          setIdeasEventLog((previous) => [{
+          if (agentEvent.toolName === "scout_instagram_references") {
+            setIdeasRecentSkill("scout-instagram-references");
+          }
+          const argsDetail = agentEvent.args
+            ? JSON.stringify(agentEvent.args, null, 2)
+            : "실행 시작";
+          setIdeasEventLog((previous) => [...previous, {
             id: `${Date.now()}-${previous.length}`,
             kind: "tool" as const,
-            label: agentEvent.toolName!,
-            detail: "실행 시작",
-          }, ...previous].slice(0, 40));
+            label: `${agentEvent.toolName} 호출`,
+            detail: argsDetail,
+          }].slice(-40));
         }
         if (agentEvent.type === "tool_finished" && agentEvent.toolName) {
           setIdeasRecentTool(`${agentEvent.toolName} 완료`);
-          setIdeasEventLog((previous) => [{
+          setIdeasEventLog((previous) => [...previous, {
             id: `${Date.now()}-${previous.length}`,
             kind: "tool" as const,
-            label: agentEvent.toolName!,
-            detail: "실행 완료",
-          }, ...previous].slice(0, 40));
+            label: `${agentEvent.toolName} 결과`,
+            detail: agentEvent.resultSummary ?? "실행 완료",
+          }].slice(-40));
         }
-        if (agentEvent.type === "result" && agentEvent.ideas) {
-          const resultMessage = "두 가지 아이디어를 정리했어요.";
+        if (agentEvent.type === "result" && agentEvent.output) {
+          const resultMessage = "두 가지 아이디어와 슬라이드 플랜을 정리했어요.";
           setIdeasCurrentReasoning(resultMessage);
-          setIdeasEventLog((previous) => [{
+          setIdeasEventLog((previous) => [...previous, {
             id: `${Date.now()}-result`,
             kind: "status" as const,
             label: resultMessage,
             detail: "completed",
-          }, ...previous].slice(0, 40));
-          setIdeas(agentEvent.ideas);
+          }].slice(-40));
+          setIdeas(agentEvent.output.ideas);
+          setReferences(agentEvent.output.references);
+          setMarketerCompliance(agentEvent.output.compliance ?? []);
           setIdeasLoading(false);
           stream.close();
           marketerStream.current = null;
@@ -649,12 +512,12 @@ export default function Home() {
         if (marketerStream.current !== stream) return;
         const errorMessage = "마케팅 agent stream 연결이 끊겼어요";
         setIdeasCurrentReasoning(errorMessage);
-        setIdeasEventLog((previous) => [{
+        setIdeasEventLog((previous) => [...previous, {
           id: `${Date.now()}-stream-error`,
           kind: "status" as const,
           label: errorMessage,
           detail: "error",
-        }, ...previous].slice(0, 40));
+        }].slice(-40));
         setIdeasLoading(false);
         setIdeas([]);
         setIdeasError(errorMessage);
@@ -665,12 +528,12 @@ export default function Home() {
       setIdeas([]);
       const errorMessage = error instanceof Error ? error.message : "마케팅 에이전트를 실행하지 못했어요";
       setIdeasCurrentReasoning(errorMessage);
-      setIdeasEventLog((previous) => [{
+      setIdeasEventLog((previous) => [...previous, {
         id: `${Date.now()}-request-error`,
         kind: "status" as const,
         label: errorMessage,
         detail: "error",
-      }, ...previous].slice(0, 40));
+      }].slice(-40));
       setIdeasError(errorMessage);
       setIdeasLoading(false);
     } finally {
@@ -706,11 +569,11 @@ export default function Home() {
         )}
 
         {screen === "ideas" && (
-          <Ideas ideas={ideas} referenceAssets={referenceAssets} referenceLinks={referenceLinks} loading={ideasLoading} editorInputLoading={editorInputLoading} editorInputStatus={editorInputStatus} editorInputTraceId={editorInputTraceId} editorInputAttempts={editorInputAttempts} error={ideasError} ready={Boolean(activeProjectId && storedUserAssets.length)} currentReasoning={ideasCurrentReasoning} recentSkill={ideasRecentSkill} recentTool={ideasRecentTool} eventLog={ideasEventLog} streamText={ideasStreamText} traceId={ideasTraceId} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
+          <Ideas ideas={ideas} references={references} compliance={marketerCompliance} loading={ideasLoading} editorInputLoading={editorInputLoading} editorInputStatus={editorInputStatus} error={ideasError} ready={Boolean(activeProjectId && storedUserAssets.length)} currentReasoning={ideasCurrentReasoning} recentSkill={ideasRecentSkill} recentTool={ideasRecentTool} eventLog={ideasEventLog} streamText={ideasStreamText} traceId={ideasTraceId} selectedIdea={selectedIdea} onSelect={chooseIdea} onBack={() => setScreen("brief")} onContinue={createPost} />
         )}
 
-        {screen === "editor" && selectedIdea && brandContext && editorInput && activeProjectId && (
-          <EditorPlaneMount projectId={activeProjectId} editorInput={editorInput} editorInputTraceId={editorInputTraceId} editorInputAttempts={editorInputAttempts} idea={selectedIdea} task={brief} brandText={brandText} brandContext={brandContext} assetItems={files.map((file) => ({ assetId: file.id, name: file.name, dataUrl: file.dataUrl, url: storedUserAssets.find((asset) => asset.assetId === file.id)?.signedUrl }))} onBack={() => setScreen("ideas")} onFinish={(result: EditorPlaneResult) => {
+        {screen === "editor" && selectedIdea && brandContext && activeProjectId && (
+          <EditorPlaneMount projectId={activeProjectId} idea={selectedIdea} references={editorReferences} task={brief} brandText={brandText} brandContext={brandContext} assetItems={editorAssetItems} onBack={() => setScreen("ideas")} onFinish={(result: EditorPlaneResult) => {
             const gradients = selectedIdea.accent === "coral"
               ? ["sunset", "seafoam", "sand", "night", "coral"]
               : ["dawn", "ocean", "cream", "twilight", "blue"];
@@ -788,16 +651,16 @@ function Onboarding({
 
   return <div className="content onboarding-screen">
     <div className="onboarding-grid onboarding-form-only">
-      <div className="onboarding-form-intro"><span>✦</span><div><strong>짧고 편하게 답해주세요</strong><p>정답은 없어요. 지금 운영하고 싶은 방향을 평소 말투로 적으면 됩니다.</p></div></div>
+      <div className="onboarding-form-intro"><span>✦</span><div><strong>브랜드 프로필</strong><p>계정 운영 방향을 입력하면 마케터·편집자 에이전트가 이 정보를 기준으로 콘텐츠를 만듭니다.</p></div></div>
       <form className="form-card onboarding-form" onSubmit={submit}>
         <div className="form-card-top"><span className="card-index">01 — 05</span></div>
         <div className="identity-fields">
           <label className={`qa-field ${showRequired && !answers.accountName.trim() ? "missing" : ""}`} htmlFor="accountName"><span>계정 이름 <b>*</b></span><input id="accountName" aria-invalid={showRequired && !answers.accountName.trim()} value={answers.accountName} onChange={(event) => updateAnswer("accountName", event.target.value)} placeholder="예: 소도시 식탁" maxLength={80} /><small className={showRequired && !answers.accountName.trim() ? "visible" : ""}>필수 항목이에요</small></label>
           <label className={`qa-field ${showRequired && !answers.instagramHandle.trim() ? "missing" : ""}`} htmlFor="instagramHandle"><span>Instagram ID <b>*</b></span><div className="handle-input"><b>@</b><input id="instagramHandle" aria-invalid={showRequired && !answers.instagramHandle.trim()} value={answers.instagramHandle} onChange={(event) => updateAnswer("instagramHandle", event.target.value)} placeholder="smallcity.table" maxLength={64} autoCapitalize="none" /></div><small className={showRequired && !answers.instagramHandle.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         </div>
-        <label className={`qa-field ${showRequired && !answers.desiredMood.trim() ? "missing" : ""}`} htmlFor="desiredMood"><span>어떤 mood를 원하세요? <b>*</b></span><textarea id="desiredMood" aria-invalid={showRequired && !answers.desiredMood.trim()} value={answers.desiredMood} onChange={(event) => updateAnswer("desiredMood", event.target.value)} placeholder="예: 따뜻하고 차분하지만 정보는 빠르게 읽히는 분위기" maxLength={500} /><small className={showRequired && !answers.desiredMood.trim() ? "visible" : ""}>필수 항목이에요</small></label>
-        <label className={`qa-field ${showRequired && !answers.mainTopics.trim() ? "missing" : ""}`} htmlFor="mainTopics"><span>주로 어떤 주제를 다루시나요? <b>*</b></span><textarea id="mainTopics" aria-invalid={showRequired && !answers.mainTopics.trim()} value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집" maxLength={500} /><small className={showRequired && !answers.mainTopics.trim() ? "visible" : ""}>필수 항목이에요</small></label>
-        <label className={`qa-field ${showRequired && !answers.preferredFormats.trim() ? "missing" : ""}`} htmlFor="preferredFormats"><span>유지하고 싶은 format이 있나요? <b>*</b></span><textarea id="preferredFormats" aria-invalid={showRequired && !answers.preferredFormats.trim()} value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 정도의 카드뉴스, 비속어는 사용하지 않기" maxLength={500} /><small className={showRequired && !answers.preferredFormats.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+        <label className={`qa-field ${showRequired && !answers.desiredMood.trim() ? "missing" : ""}`} htmlFor="desiredMood"><span>원하는 무드 <b>*</b></span><textarea id="desiredMood" aria-invalid={showRequired && !answers.desiredMood.trim()} value={answers.desiredMood} onChange={(event) => updateAnswer("desiredMood", event.target.value)} placeholder="예: 따뜻하고 차분하지만 정보는 빠르게 읽히는 분위기" maxLength={500} /><small className={showRequired && !answers.desiredMood.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+        <label className={`qa-field ${showRequired && !answers.mainTopics.trim() ? "missing" : ""}`} htmlFor="mainTopics"><span>주요 주제 <b>*</b></span><textarea id="mainTopics" aria-invalid={showRequired && !answers.mainTopics.trim()} value={answers.mainTopics} onChange={(event) => updateAnswer("mainTopics", event.target.value)} placeholder="예: 국내 소도시 여행, 로컬 맛집" maxLength={500} /><small className={showRequired && !answers.mainTopics.trim() ? "visible" : ""}>필수 항목이에요</small></label>
+        <label className={`qa-field ${showRequired && !answers.preferredFormats.trim() ? "missing" : ""}`} htmlFor="preferredFormats"><span>유지할 형식 <b>*</b></span><textarea id="preferredFormats" aria-invalid={showRequired && !answers.preferredFormats.trim()} value={answers.preferredFormats} onChange={(event) => updateAnswer("preferredFormats", event.target.value)} placeholder="예: 표지는 짧은 한 줄, 5~7장 정도의 카드뉴스, 비속어는 사용하지 않기" maxLength={500} /><small className={showRequired && !answers.preferredFormats.trim() ? "visible" : ""}>필수 항목이에요</small></label>
         {error && <div className="onboarding-error"><span>!</span>{error}</div>}
         <button className="primary-button onboarding-submit" disabled={loading} type="submit">{loading ? "브랜드와 기존 게시물을 분석하는 중…" : "브랜드 방향 저장하기"} <span>→</span></button>
       </form>
@@ -815,7 +678,7 @@ function AccountGrowthChart() {
         </div>
         <div className="growth-summary"><strong>+8.4%</strong><span>최근 30일</span></div>
       </div>
-      <p className="growth-description">계정이 꾸준히 성장하고 있어요.</p>
+      <p className="growth-description">최근 30일 팔로워 추이입니다.</p>
       <div className="growth-chart">
         <div className="growth-y-axis"><span>2,500</span><span>2,400</span><span>2,300</span></div>
         <div className="growth-plot">
@@ -849,7 +712,7 @@ function TopPosts() {
   return (
     <section className="top-posts-section" aria-label="성과가 좋았던 게시물 TOP 3">
       <div className="top-posts-heading"><div><div className="section-label">TOP PERFORMING POSTS</div><h2>성과가 좋았던 게시물</h2></div><span>TOP 3 · 최근 30일</span></div>
-      <p className="top-posts-description">사람들이 많이 보고, 반응하고, 저장한 게시물들이에요.</p>
+      <p className="top-posts-description">최근 30일 도달·참여·저장이 높았던 게시물입니다.</p>
       <div className="top-posts-grid">
         {posts.map((post) => <article className="top-post-card" key={post.rank}>
           <div className="top-post-image"><img src={post.image} alt={`${post.rank}위 게시물 음식 사진`} /></div>
@@ -877,7 +740,7 @@ function Dashboard({
   onEditProfile: () => void;
   onSignOut: () => void;
 }) {
-  return <div className="content dashboard-page"><div className="page-heading"><div><h1>좋은 콘텐츠는<br /><em>다음 장면</em>에서 시작돼요.</h1></div><div className="dashboard-heading-actions"><div className="account-actions"><button className="account-action" onClick={onEditProfile}>프로필 수정</button><button className="account-action" onClick={onSignOut}>로그아웃</button></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote"><span className="profile-identity">{context.accountName}(@{context.instagramHandle})</span>{context.brandSummary.replace(/^[“"]/, "").replace(/[”"]$/, "").replace(`${context.accountName}(@${context.instagramHandle})`, "")}</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel account-summary-panel"><div className="account-summary-heading"><div><div className="section-label">ACCOUNT STATUS</div><h2>내 계정 상태</h2></div><span className="summary-period">최근 30일</span></div><p className="summary-description">지난 기간과 비교한 계정의 주요 성과예요.</p><div className="summary-metrics"><div className="summary-metric"><span>팔로워</span><strong>2,486</strong><small className="positive">+8.4%</small></div><div className="summary-metric"><span>도달한 계정</span><strong>18.6K</strong><small className="positive">+12.7%</small></div><div className="summary-metric"><span>참여율</span><strong>6.8%</strong><small className="positive">+1.2%p</small></div></div><div className="summary-footnote"><span className="summary-status-dot" /> 계정 흐름이 안정적으로 성장하고 있어요.</div></div></div><AccountGrowthChart /><TopPosts /><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
+  return <div className="content dashboard-page"><div className="page-heading"><div><h1>대시보드</h1></div><div className="dashboard-heading-actions"><div className="account-actions"><button className="account-action" onClick={onEditProfile}>프로필 수정</button><button className="account-action" onClick={onSignOut}>로그아웃</button></div><div className="dashboard-actions"><a className="secondary-link" href="/analysis">Instagram 계정 분석</a><button className="primary-button compact" onClick={onNewProject}>새 게시물 만들기 <span>＋</span></button></div></div></div><div className="dashboard-grid"><div className="profile-panel"><div className="section-label">YOUR BRAND DIRECTION</div><div className="profile-quote"><span className="profile-identity">{context.accountName}(@{context.instagramHandle})</span>{context.brandSummary.replace(/^[“"]/, "").replace(/[”"]$/, "").replace(`${context.accountName}(@${context.instagramHandle})`, "")}</div><div className="profile-tags">{context.moodKeywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}</div><button className="text-button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>마케터·편집자 공통 컨텍스트 적용됨 ✓</button></div><div className="activity-panel account-summary-panel"><div className="account-summary-heading"><div><div className="section-label">ACCOUNT STATUS</div><h2>내 계정 상태</h2></div><span className="summary-period">최근 30일</span></div><p className="summary-description">지난 30일 대비 주요 지표입니다.</p><div className="summary-metrics"><div className="summary-metric"><span>팔로워</span><strong>2,486</strong><small className="positive">+8.4%</small></div><div className="summary-metric"><span>도달한 계정</span><strong>18.6K</strong><small className="positive">+12.7%</small></div><div className="summary-metric"><span>참여율</span><strong>6.8%</strong><small className="positive">+1.2%p</small></div></div><div className="summary-footnote"><span className="summary-status-dot" /> 최근 30일 주요 지표가 상승했습니다.</div></div></div><AccountGrowthChart /><TopPosts /><div className="dashboard-footer"><span>CONTEXT</span><p>마케터는 훅과 아이디어 방향에, 편집자는 문장 밀도·이미지 처리·슬라이드 흐름에 이 프로필을 사용합니다.</p></div><details className="agent-context-panel"><summary>Agent Context JSON 보기</summary><p>마케터와 편집자 Agent에 전달되는 동일한 구조화 컨텍스트입니다.</p><pre>{JSON.stringify(context, null, 2)}</pre></details></div>;
 }
 
 function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReorderFiles, onDescriptionChange, onBack, onContinue, loading, error }: { brief: string; setBrief: (value: string) => void; files: UploadedAsset[]; fileError: string; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRemoveFile: (index: number) => void; onReorderFiles: (fromIndex: number, toIndex: number) => void; onDescriptionChange: (index: number, description: string) => void; onBack: () => void; onContinue: () => void; loading: boolean; error: string }) {
@@ -926,17 +789,30 @@ function Brief({ brief, setBrief, files, fileError, onFiles, onRemoveFile, onReo
     setActiveAssetId(remaining[nextIndex]?.id ?? null);
   }
 
-  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">NEW PROJECT / 01</div><h1>이번 이야기를<br /><em>들려주세요.</em></h1><p className="heading-description">게시물의 전체 방향을 적고, 필요한 사진에만 추가 정보를 덧붙여주세요.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 이번 게시물은 어떤 이야기인가요?</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">여행 기간, 주제, 원하는 구성처럼 게시물 전체를 설명하는 내용을 자세하게 적을수록 더 멋진 게시물이 나온답니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 9 FILES"}</span></div><h2>2. 필요한 사진에만 이야기를 더해주세요.</h2><p>사진 설명은 선택사항입니다. 마케터가 고른 이야기 흐름에 맞춰 필요한 사진과 슬라이드 수를 정합니다.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 9장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>이 사진에 대해 알려주세요 <small>(선택)</small></strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="선택사항 · 예: 여행 2일차에 방문한 식당, 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 받아보기"} <b>→</b></button></div></div></div>;
+  return <div className="content brief-screen"><div className="page-heading"><div><div className="content-kicker">콘텐츠 요청 · 02</div><h1>콘텐츠 <em>요청</em></h1><p className="heading-description">게시물 방향을 적고 사진을 업로드하세요. 사진 설명은 선택입니다.</p></div><div className="progress-copy">01 <span>/</span> 02<br /><small>PROJECT BRIEF</small></div></div><div className="story-brief-card"><div className="section-label">POST DIRECTION <span>REQUIRED</span></div><label htmlFor="brief">1. 게시물 방향</label><textarea id="brief" value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="예: 이번에 3박 4일 강릉 여행을 다녀왔어요. 여행의 흐름이 보이도록 일차별로 나누어 만들어주세요." /><div className="brief-hint">기간·주제·원하는 구성 등 전체 방향을 자세히 적을수록 결과가 좋아집니다.</div></div><section className="asset-section"><div className="asset-section-heading"><div><div className="section-label">YOUR ASSETS <span>{files.length ? `${files.length} FILES` : "UP TO 9 FILES"}</span></div><h2>2. 사진 업로드</h2><p>사진 설명은 선택입니다. 업로드 순서가 슬라이드 순서의 기준이 됩니다.</p></div><label className="asset-add-button"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><span>＋</span> 사진 추가</label></div>{fileError && <div className="asset-upload-error" role="alert">{fileError}</div>}{files.length === 0 ? <label className="upload-zone story-upload-zone"><input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple onChange={onFiles} /><div className="upload-icon">↑</div><strong>사진을 여기에 놓거나 클릭하세요</strong><span>JPG, JPEG, PNG, WEBP · 장당 최대 10MB · 최대 9장</span></label> : <><div className="asset-carousel" ref={carouselRef}><button className="asset-carousel-arrow previous" type="button" aria-label="이전 사진" disabled={safeAssetIndex === 0} onClick={() => setActiveAssetId(files[Math.max(0, safeAssetIndex - 1)]?.id ?? null)}>‹</button><div className="asset-carousel-track" ref={trackRef}>{files.map((file, index) => { const isActive = index === safeAssetIndex; return <div className={`asset-carousel-slide ${isActive ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`} key={file.id} ref={(el) => { if (el) slideRefs.current.set(file.id, el); else slideRefs.current.delete(file.id); }} role="button" tabIndex={0} onClick={() => setActiveAssetId(file.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveAssetId(file.id); } }} onDragOver={(event) => { if (dragIndexRef.current === null) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDragOverIndex(index); }} onDragLeave={() => setDragOverIndex((current) => (current === index ? null : current))} onDrop={(event) => { event.preventDefault(); const from = dragIndexRef.current; dragIndexRef.current = null; setDragOverIndex(null); if (from === null || from === index) return; onReorderFiles(from, index); }} aria-label={`${index + 1}번째 사진 보기`}><img src={file.previewUrl} alt={`${index + 1}번째 업로드 사진: ${file.name}`} onLoad={centerActiveSlide} /><span>{String(index + 1).padStart(2, "0")}</span><button type="button" className="asset-carousel-slide-delete" onClick={(event) => { event.stopPropagation(); removeFileAt(index); }} aria-label={`${index + 1}번째 사진 삭제`} /><button type="button" className="asset-carousel-slide-handle" draggable onClick={(event) => event.stopPropagation()} onDragStart={(event) => { dragIndexRef.current = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); }} onDragEnd={() => { dragIndexRef.current = null; setDragOverIndex(null); }} aria-label={`${index + 1}번째 사진 순서 변경`}>≡</button></div>; })}</div><button className="asset-carousel-arrow next" type="button" aria-label="다음 사진" disabled={safeAssetIndex === files.length - 1} onClick={() => setActiveAssetId(files[Math.min(files.length - 1, safeAssetIndex + 1)]?.id ?? null)}>›</button></div><div className="asset-carousel-progress"><span>{safeAssetIndex + 1} / {files.length}</span><div>{files.map((file, index) => <button className={index === safeAssetIndex ? "active" : ""} type="button" key={file.id} onClick={() => setActiveAssetId(file.id)} aria-label={`${index + 1}번째 사진으로 이동`} />)}</div></div>{activeAsset && <div className="active-asset-description"><div className="active-asset-heading"><div><span>PHOTO {String(safeAssetIndex + 1).padStart(2, "0")}</span><strong>사진 설명 <small>(선택)</small></strong></div></div><textarea id={`asset-description-${activeAsset.id}`} value={activeAsset.description} onChange={(event) => onDescriptionChange(safeAssetIndex, event.target.value)} placeholder="선택사항 · 예: 여행 2일차에 방문한 식당, 점심에는 20분 정도 기다렸어요." /></div>}</>}</section><div className="brief-footer"><button className="secondary-button" onClick={onBack}>← 이전</button><div>{error && <span className="asset-upload-error">{error}</span>}<button className="primary-button" disabled={!isReady || loading} onClick={onContinue}>{loading ? "분석 중…" : "아이디어 생성"} <b>→</b></button></div></div></div>;
 }
 
-function Ideas({ ideas, referenceAssets, referenceLinks, loading, editorInputLoading, editorInputStatus, editorInputTraceId, editorInputAttempts, error, ready, currentReasoning, recentSkill, recentTool, eventLog, streamText, traceId, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; referenceAssets: ReferenceAssetCandidate[]; referenceLinks: ReferenceLinkCandidate[]; loading: boolean; editorInputLoading: boolean; editorInputStatus: string; editorInputTraceId: string; editorInputAttempts: EditorInputGenerationAttempt[]; error: string; ready: boolean; currentReasoning: string; recentSkill: string; recentTool: string; eventLog: AgentLogEntry[]; streamText: string; traceId: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
+function slidePlanLabel(slide: Idea["slides"][number], index: number): string {
+  const preferred = slide.text?.find(
+    (item) => item.role === "title" || item.role === "hook",
+  );
+  return preferred?.content ?? slide.text?.[0]?.content ?? `슬라이드 ${index + 1}`;
+}
+
+function Ideas({ ideas, references, compliance, loading, editorInputLoading, editorInputStatus, error, ready, currentReasoning, recentSkill, recentTool, eventLog, streamText, traceId, selectedIdea, onSelect, onBack, onContinue }: { ideas: Idea[]; references: Reference[]; compliance: ComplianceCheck[]; loading: boolean; editorInputLoading: boolean; editorInputStatus: string; error: string; ready: boolean; currentReasoning: string; recentSkill: string; recentTool: string; eventLog: AgentLogEntry[]; streamText: string; traceId: string; selectedIdea: Idea | null; onSelect: (idea: Idea) => void; onBack: () => void; onContinue: () => void }) {
+  const referenceById = new Map(references.map((reference) => [reference.id, reference]));
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [eventLog]);
   return (
     <div className="content ideas-screen">
       <div className="page-heading">
         <div>
-          <div className="content-kicker">CONTENT DIRECTION / 02</div>
-          <h1>두 가지 방향을 <em>준비했어요.</em></h1>
-          <p className="heading-description">같은 사진도 어떤 시선으로 묶느냐에 따라 전혀 다른 브랜드 경험이 됩니다.</p>
+          <div className="content-kicker">콘텐츠 방향 · 03</div>
+          <h1>콘텐츠 방향 <em>선택</em></h1>
+          <p className="heading-description">업로드한 사진과 브랜드 정보로 만든 두 가지 방향입니다. 하나를 선택해 편집으로 넘어가세요.</p>
         </div>
       </div>
       {error && <div className="brief-hint"><span>!</span> {error}</div>}
@@ -954,20 +830,20 @@ function Ideas({ ideas, referenceAssets, referenceLinks, loading, editorInputLoa
               <div className="marketer-run-summary" aria-live="polite">
                 <div className="marketer-run-row reasoning">
                   <span className="marketer-run-icon">✦</span>
-                  <div><span className="marketer-run-label">CURRENT REASONING</span><strong>{currentReasoning}</strong></div>
+                  <div><span className="marketer-run-label">CURRENT ACTIVITY</span><strong>{currentReasoning}</strong></div>
                 </div>
                 <div className="marketer-run-row skill">
                   <span className="marketer-run-icon">◇</span>
-                  <div><span className="marketer-run-label">RECENT SKILL</span><strong>{recentSkill}</strong></div>
+                  <div><span className="marketer-run-label">ACTIVE SKILL</span><strong>{recentSkill}</strong></div>
                 </div>
                 <div className="marketer-run-row tool">
                   <span className="marketer-run-icon">⌁</span>
                   <div><span className="marketer-run-label">MOST RECENT TOOL</span><strong>{recentTool}</strong></div>
                 </div>
               </div>
-              <details className="marketer-event-details">
-                <summary><span>전체 reasoning · skill · tool 로그</span><span>{eventLog.length} events</span></summary>
-                <div className="marketer-event-log">
+              <details className="marketer-event-details" open>
+                <summary><span>실제 tool 호출 · 모델 활동 로그</span><span>{eventLog.length} events</span></summary>
+                <div className="marketer-event-log" ref={logRef}>
                   {eventLog.map((entry) => (
                     <div className={`marketer-event-row ${entry.kind}`} key={entry.id}>
                       <span>{entry.kind.toUpperCase()}</span>
@@ -984,69 +860,102 @@ function Ideas({ ideas, referenceAssets, referenceLinks, loading, editorInputLoa
             </div>
           </div>
         ) : (
-          ideas.map((idea) => {
-            const matchedReferences = (idea.referenceAssetIds ?? [])
-              .map((referenceId) => referenceAssets.find((reference) => reference.assetId === referenceId))
-              .filter((reference): reference is ReferenceAssetCandidate => Boolean(reference))
-              .slice(0, 2);
-            const references = matchedReferences.length
-              ? matchedReferences
-              : referenceLinks.slice(0, 2);
+          ideas.map((idea) => (
+            <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} key={idea.id} onClick={() => onSelect(idea)}>
+              <div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.label}</span><i>{idea.slides.length}장</i></div>
+              <div className="idea-card-body">
+                <div className="idea-label">{idea.format}</div>
+                <h2>{idea.title}</h2>
+                <p>{idea.description}</p>
 
-            return (
-              <div className="idea-option" key={idea.id}>
-                <button className={`idea-card ${selectedIdea?.id === idea.id ? "selected" : ""}`} onClick={() => onSelect(idea)}>
-                  <div className={`idea-visual ${idea.accent}`}><div className="visual-noise" /><span>{idea.id === "guide" ? "A GUIDE\nTO GANGNEUNG" : "NOTES FROM\nGANGNEUNG"}</span><i>✦</i></div>
-                  <div className="idea-card-body">
-                    <div className="idea-label">{idea.label}</div>
-                    <h2>{idea.title}</h2>
-                    <p>{idea.description}</p>
-                  </div>
-                  <div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div>
-                </button>
-                {references.length > 0 && (
-                  <div className="idea-references">
-                    <span className="idea-references-label">분석에 참고한 레퍼런스</span>
-                    <div className="idea-reference-links">
-                      {references.map((reference, index) => (
-                        <a href={reference.instagramUrl} key={reference.assetId} target="_blank" rel="noreferrer" title={reference.instagramUrl}>
-                          <span>REF {String(index + 1).padStart(2, "0")}</span>
-                          <strong>{reference.instagramUrl}</strong>
-                          <b aria-hidden="true">↗</b>
-                        </a>
-                      ))}
+                <div className="idea-plan-block">
+                  <div className="idea-plan-label">DESIGN DIRECTION</div>
+                  <p className="idea-design-direction">{idea.designDirection}</p>
+                </div>
+
+                {(() => {
+                  const cardReferenceIds = [...new Set([
+                    ...idea.referenceIds,
+                    ...idea.slides.flatMap((slide) => slide.referenceInspirations.map((inspiration) => inspiration.referenceId)),
+                  ])];
+                  if (!cardReferenceIds.length) {
+                    return <div className="idea-refs empty">참고한 레퍼런스 없음 · 사용자 사진 기반</div>;
+                  }
+                  return (
+                    <div className="idea-refs">
+                      <div className="idea-plan-label">참고 레퍼런스 {cardReferenceIds.length}</div>
+                      <div className="idea-refs-list">
+                        {cardReferenceIds.map((referenceId) => {
+                          const reference = referenceById.get(referenceId);
+                          return (
+                            <span className="idea-ref-chip" key={referenceId} title={reference?.instagramUrl}>
+                              {reference?.previewImageUrl
+                                ? <img src={reference.previewImageUrl} alt="레퍼런스" loading="lazy" />
+                                : <em>ref</em>}
+                              <small>{reference?.creatorHandle ? `@${reference.creatorHandle}` : referenceId}</small>
+                            </span>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
+
+                <div className="idea-plan-block">
+                  <div className="idea-plan-label">슬라이드 설계 · {idea.slides.length}장</div>
+                  <ol className="idea-plan">
+                    {idea.slides.map((slide, index) => (
+                      <li className="idea-plan-row" key={index}>
+                        <span className="idea-plan-index">{String(index + 1).padStart(2, "0")}</span>
+                        <div className="idea-plan-copy">
+                          <strong>{slidePlanLabel(slide, index)}</strong>
+                          <small>{slide.intent}</small>
+                          <div className="idea-plan-tags">
+                            <span className={`idea-treatment ${slide.imageTreatment}`}>{slide.imageTreatment === "full_bleed" ? "full-bleed" : "contained"}</span>
+                            <span className="idea-treatment neutral">{slide.text?.length ?? 0} text</span>
+                            {slide.referenceInspirations.map((inspiration, refIndex) => (
+                              <span className="idea-treatment ref" key={refIndex} title={`${inspiration.borrowed} → ${inspiration.adaptedHow}`}>ref {inspiration.borrowed}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               </div>
-            );
-          })
+              <div className="select-mark">{selectedIdea?.id === idea.id ? "✓" : "○"}</div>
+            </button>
+          ))
         )}
       </div>
-      {(editorInputLoading || editorInputTraceId || editorInputAttempts.length > 0) && (
+      {!loading && compliance.length > 0 && (
+        <section className="marketer-compliance" aria-label="마케터 절차 검증">
+          <div className="marketer-compliance-heading">MARKETER 절차 검증</div>
+          <div className="marketer-compliance-list">
+            {compliance.map((check) => (
+              <div className={`compliance-row ${check.passed ? "pass" : "fail"}`} key={check.id}>
+                <span className="compliance-mark">{check.passed ? "✓" : "!"}</span>
+                <div>
+                  <strong>{check.label}</strong>
+                  <small>{check.detail}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {editorInputLoading && (
         <section className="editor-input-planner-card" aria-live="polite" aria-busy={editorInputLoading}>
           <div className="editor-input-planner-heading">
-            <span><i className={editorInputLoading ? "active" : ""} /> EDITOR INPUT PLANNER</span>
-            {editorInputTraceId && <small title={editorInputTraceId}>TRACE {editorInputTraceId.slice(-10)}</small>}
+            <span><i className="active" /> 편집 화면 준비</span>
           </div>
           <strong>{editorInputStatus}</strong>
-          <p>선택한 카드의 슬라이드 흐름을 기준으로 사진 선택, 크롭 방향, 텍스트 레이어와 공통 디자인 원칙을 구조화합니다.</p>
-          {editorInputAttempts.length > 0 && (
-            <div className="editor-input-planner-attempts">
-              {editorInputAttempts.map((attempt) => (
-                <div key={`${attempt.attempt}-${attempt.status}`}>
-                  <span>TRY {attempt.attempt}</span>
-                  <strong>{attempt.status}</strong>
-                  <small>{attempt.message}</small>
-                </div>
-              ))}
-            </div>
-          )}
+          <p>마케터가 카드별로 완성한 슬라이드 플랜을 편집 화면으로 그대로 전달합니다.</p>
         </section>
       )}
       <div className="idea-footer">
         <button className="secondary-button" onClick={onBack}>← 요청 수정</button>
-        <button className="primary-button" disabled={!selectedIdea || loading || editorInputLoading || !ready} onClick={onContinue}>{editorInputLoading ? "편집 지시 설계 중…" : "이 방향으로 제작하기"} <span>→</span></button>
+        <button className="primary-button" disabled={!selectedIdea || loading || editorInputLoading || !ready} onClick={onContinue}>이 방향으로 제작하기 <span>→</span></button>
       </div>
     </div>
   );
@@ -1149,5 +1058,5 @@ function Review({ projectId, post, instagramHandle, activeSlide, setActiveSlide,
     }
   }
 
-  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>게시물이 완성됐어요.</h1><p className="heading-description">다운로드하거나 연결된 Instagram 계정에 바로 게시할 수 있어요.</p></div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${previewImageUrl ? "agent-rendered" : ""}`}>{previewImageUrl ? <img className="agent-rendered-image" src={previewImageUrl} alt={`${activeSlide + 1}번째 편집자 에이전트 결과`} /> : <><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>@{instagramHandle}</span><span>✦</span></div></>}</div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.nodeId ?? item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><textarea aria-label="Instagram 게시물 캡션" value={caption} maxLength={2200} onChange={(event) => setCaption(event.target.value)} /><small>{caption.length} / 2,200</small></div>{!contentReady && <div className="publish-message error">Instagram 캐러셀은 완성된 이미지 2~10장이 필요해요. 현재 결과는 다운로드만 가능해요.</div>}{accountStatus === "error" && <div className="publish-message error">{accountError}</div>}{publishError && <div className="publish-message error" role="alert">{publishError}</div>}{publishedUrl && <div className="publish-message success">게시가 완료됐어요. <a href={publishedUrl} target="_blank" rel="noreferrer">Instagram에서 보기 ↗</a></div>}<div className="review-publish-target">게시 대상 <strong>{accountStatus === "checking" ? "계정 확인 중…" : `@${connectedAccount}`}</strong></div><div className="review-action-grid"><button className="secondary-button" onClick={downloadSlides}>게시물 다운로드 <span>↓</span></button><button className="primary-button instagram-publish-button" disabled={!canPublish || publishing || Boolean(publishedUrl)} onClick={publishToInstagram}>{publishedUrl ? "게시 완료 ✓" : publishing ? "Instagram 게시 중…" : "Instagram에 게시"} <span>↗</span></button></div><div className="button-row review-secondary-actions"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div>{post.diagnostics && <details className="agent-context-panel"><summary>EditorInput · Agent Trace 보기</summary><p>다음 실험에서 입력 품질과 실행 결과를 함께 비교할 수 있도록 보존된 진단 정보입니다.</p><pre>{JSON.stringify(post.diagnostics, null, 2)}</pre></details>}</div></div></div>;
+  return <div className="content review-screen"><div className="page-heading"><div><div className="content-kicker">EDITOR AGENT / 03</div><h1>게시물이 <em>완성되었어요</em></h1><p className="heading-description">다운로드하거나 연결된 Instagram 계정에 바로 게시할 수 있어요.</p></div><div className="render-status"><span className="status-orb green" /> READY TO REVIEW</div></div><div className="review-grid"><div className={`post-preview ${slide.gradient} ${previewImageUrl ? "agent-rendered" : ""}`}>{previewImageUrl ? <img className="agent-rendered-image" src={previewImageUrl} alt={`${activeSlide + 1}번째 편집자 에이전트 결과`} /> : <><div className="preview-top"><span>BMT</span><span>{slide.eyebrow}</span></div><div className="preview-content"><div className="preview-eyebrow">{slide.eyebrow}</div><h2>{slide.title}</h2><p>{slide.copy}</p></div><div className="preview-bottom"><span>@{instagramHandle}</span><span>✦</span></div></>}</div><div className="review-info"><div className="section-label">CAROUSEL PREVIEW <span>{activeSlide + 1} / {post.slides.length}</span></div><div className="slide-strip">{post.slides.map((item, index) => <button className={index === activeSlide ? "active" : ""} key={`${item.nodeId ?? item.title}-${index}`} onClick={() => setActiveSlide(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong></button>)}</div><div className="caption-box"><div className="section-label">CAPTION</div><textarea aria-label="Instagram 게시물 캡션" value={caption} maxLength={2200} onChange={(event) => setCaption(event.target.value)} /><small>{caption.length} / 2,200</small></div>{!contentReady && <div className="publish-message error">Instagram 캐러셀은 완성된 이미지 2~10장이 필요해요. 현재 결과는 다운로드만 가능해요.</div>}{accountStatus === "error" && <div className="publish-message error">{accountError}</div>}{publishError && <div className="publish-message error" role="alert">{publishError}</div>}{publishedUrl && <div className="publish-message success">게시가 완료됐어요. <a href={publishedUrl} target="_blank" rel="noreferrer">Instagram에서 보기 ↗</a></div>}<div className="review-publish-target">게시 대상 <strong>{accountStatus === "checking" ? "계정 확인 중…" : `@${connectedAccount}`}</strong></div><div className="review-action-grid"><button className="secondary-button" onClick={downloadSlides}>게시물 다운로드 <span>↓</span></button><button className="primary-button instagram-publish-button" disabled={!canPublish || publishing || Boolean(publishedUrl)} onClick={publishToInstagram}>{publishedUrl ? "게시 완료 ✓" : publishing ? "Instagram 게시 중…" : "Instagram에 게시"} <span>↗</span></button></div><div className="button-row review-secondary-actions"><button className="secondary-button" onClick={onBack}>← 아이디어 변경</button><button className="regenerate-button" onClick={onRestart}>↻ 새로운 게시물 만들기</button></div>{post.diagnostics && <details className="agent-context-panel"><summary>EditorInput · Agent Trace 보기</summary><p>다음 실험에서 입력 품질과 실행 결과를 함께 비교할 수 있도록 보존된 진단 정보입니다.</p><pre>{JSON.stringify(post.diagnostics, null, 2)}</pre></details>}</div></div></div>;
 }
