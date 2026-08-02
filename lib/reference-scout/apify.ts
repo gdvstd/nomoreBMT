@@ -266,6 +266,14 @@ function dedupeCandidates(candidates: ApifyPostCandidate[]) {
 }
 
 function buildSearchTerms(input: ReferenceScoutInput) {
+  const explicit = (input.searchTerms ?? [])
+    .map((term) =>
+      term
+        .replace(/[#@]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter((term) => term.length >= 2);
   const stopwords = new Set([
     "추천",
     "게시물",
@@ -313,9 +321,11 @@ function buildSearchTerms(input: ReferenceScoutInput) {
         `${location}식당`,
       ]
     : [tokens.slice(0, 2).join(""), ...tokens];
-  return [...new Set(focusedTerms)]
-    .filter((term) => term.length >= 2)
-    .slice(0, 3);
+  const derived = [...new Set(focusedTerms)].filter((term) => term.length >= 2);
+  // Merge the model's terms with reliable topic-derived terms. Cap the model's
+  // contribution so at least one topic-derived term is always searched, which
+  // prevents weak model searchTerms from zeroing out Apify candidates.
+  return [...new Set([...explicit.slice(0, 2), ...derived])].slice(0, 3);
 }
 
 function onlyPostsNewerThan(timeRange: ReferenceScoutInput["timeRange"]) {

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { editorInputSchema } from "@/lib/editor-input/types";
+import {
+  marketerIdeaCardSchema,
+  marketerReferenceSchema,
+} from "@/lib/marketer-agent/types";
 
 /**
  * The editor agent works on logical asset references rather than filesystem
@@ -25,20 +28,6 @@ export const editorTaskSchema = z.object({
   cardCount: z.number().int().positive().max(20).optional(),
 });
 
-export const editorIdeaCardSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  hook: z.string(),
-  description: z.string().optional(),
-  format: z.string().optional(),
-  assets: z.array(z.string()).default([]),
-  assetIds: z.array(z.string()).default([]),
-  slides: z.array(z.string()).default([]),
-  copyGuidelines: z.array(z.string()).optional(),
-  visualGuidelines: z.array(z.string()).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
 export const editorDesignPrinciplesSchema = z.object({
   version: z.string().optional(),
   rules: z.array(z.string()).default([]),
@@ -60,9 +49,11 @@ export const openPencilContextSchema = z.object({
 });
 
 export const editorAgentInputSchema = z.object({
-  editorInput: editorInputSchema,
+  /** The selected idea card carries the authoritative slide plan. */
+  idea: marketerIdeaCardSchema,
+  /** Design references the marketer drew on (evidence only, never rendered). */
+  references: z.array(marketerReferenceSchema).default([]),
   task: editorTaskSchema,
-  ideaCard: editorIdeaCardSchema,
   assets: z.object({
     assetSetId: z.string(),
     items: z.array(editorAssetSchema),
@@ -75,20 +66,20 @@ export const editorAgentInputSchema = z.object({
 }).superRefine((value, context) => {
   if (
     value.task.cardCount !== undefined &&
-    value.task.cardCount !== value.editorInput.slides.length
+    value.task.cardCount !== value.idea.slides.length
   ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["task", "cardCount"],
-      message: `cardCount must match EditorInput (${value.editorInput.slides.length}).`,
+      message: `cardCount must match the slide plan (${value.idea.slides.length}).`,
     });
   }
   const knownAssetIds = new Set(value.assets.items.map((asset) => asset.assetId));
-  value.editorInput.slides.forEach((slide, index) => {
+  value.idea.slides.forEach((slide, index) => {
     if (!slide.sourceAssetId || !knownAssetIds.has(slide.sourceAssetId)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["editorInput", "slides", index, "sourceAssetId"],
+        path: ["idea", "slides", index, "sourceAssetId"],
         message: "Every slide must reference a supplied user asset.",
       });
     }

@@ -11,6 +11,8 @@ export type ReferenceScoutInput = {
   region: string;
   formatFocus: "carousel" | "reel" | "single_image" | "all";
   maxReferences: number;
+  /** Optional caller-supplied search terms; falls back to topic-derived terms. */
+  searchTerms?: string[];
 };
 
 export type ReferenceScoutModelOutput = {

@@ -42,13 +42,25 @@ that was not applied to the document.
    render(parent_id=cardRootId). If you replace it with
    render(replace_id=cardRootId), keep the returned new ID; the browser will
    preserve its fixed carousel slot.
-   Keep render JSX deliberately simple and balanced. Never use JSX expressions
+   Keep render JSX syntactically simple, but make the composition expressive
+   and editorial rather than mechanically centered or evenly spaced. Never use JSX expressions
    such as {"\\n"}; use separate Text nodes when a visual line break is needed.
    If render reports a parse error, retry with one root Frame and simple direct
    children, then add detail in smaller render calls. A JSX parse error is not
    a reason to return needs_input because valid minimal JSX remains available.
+   Render JSX props: set text size with size={NN}, text color with
+   color="#RRGGBB", and weight with weight="bold". Do NOT use textSize,
+   fontSize, or other aliases — unsupported props are silently ignored and leave
+   text at a tiny default size. Titles use size 44+ and body text size 28+ on a
+   1080x1350 card. If a render result lists any "Unsupported prop ... ignored"
+   warning, re-render that node with the supported prop name before continuing.
 5. Plan the card hierarchy from the selected idea card. Reuse the supplied
    asset manifest and existing asset node IDs whenever possible.
+   Place each card's assigned user photo as you build that card, not at the end.
+   A card is not "done" until it contains exactly one visible user image; never
+   defer all images or leave a gray IMAGE_SLOT placeholder. The browser will
+   auto-place the slide's sourceAssetId image and force text-parent opacity to 1
+   as a safety net, but you must still place and crop each image intentionally.
    The browser preloads the user's actual images into the mapped node IDs with
    OpenPencil's set_image_fill tool. Preserve those nodes and their image fills:
    never use a supplied image node ID as render.replace_id. Use clone_node when
@@ -62,7 +74,7 @@ that was not applied to the document.
    set_image_fill. Only call set_image_fill when actual base64 image_data is
    available. Never finish with only
    seeded placeholder rectangles.
-   The image mapping is specified per slide by EditorInput.sourceAssetId.
+   The image mapping is specified per slide by the slide plan's sourceAssetId.
    Resolve that asset ID through the ASSET MANIFEST to the matching ordered
    assetNodeId. A source may be reused on multiple cards when instructed, but
    each placement must begin with clone_node. Every card must contain exactly
@@ -84,8 +96,9 @@ that was not applied to the document.
    never append an image after text at the same hierarchy level. In render JSX,
    put the image slot before overlays and text. Keep all text as later siblings
    above the image. Use a contrast overlay whenever text sits on photography.
-   Do not use a full-card image frame when EditorInput reserves a separate text
-   region. Keep each card as a separately addressable root node.
+   Do not use a full-card image frame when a slide's imageTreatment is
+   "contained"; reserve its separate text/graphic region. Keep each card as a
+   separately addressable root node.
    Do not render an empty IMAGE_LAYER placeholder. Render only IMAGE_SLOT,
    overlay, decoration, and text scaffold; the cloned user-image node itself is
    the IMAGE_LAYER. Reparent that clone into IMAGE_SLOT and resize it. This
@@ -94,22 +107,47 @@ that was not applied to the document.
    0.20-0.45). An opaque overlay hides the photo and is always a failure. If a
    tool cannot set opacity, remove/re-render the overlay with explicit opacity;
    never proceed with a solid full-card rectangle above the image.
+   Never apply opacity below 1.0 to a Frame or Group that contains text: parent
+   opacity multiplies every descendant and makes otherwise solid text faint.
+   Build a translucent PANEL_BACKGROUND as a separate earlier sibling, then
+   put an opacity=1 TEXT_BLOCK and opacity=1 Text nodes above it. Text fill must
+   be fully opaque. Do not use low-alpha gray or blue text over photography.
+   Use either near-white text over a sufficiently dark overlay or near-black
+   text over a sufficiently opaque light panel, targeting at least 4.5:1 visual
+   contrast for normal text and 3:1 for large text.
+   OpenPencil render does not support CSS/Figma auto-layout assumptions. Do not
+   use direction, spacing, gap, padding, or other props after render warns they
+   are unsupported. Position every Text explicitly with x, y, w, and h. Give
+   each line its own non-overlapping vertical band and keep all glyphs at least
+   64px from every card edge. A render warning affecting layout is a repair
+   task, never an acceptable final warning.
 7. After each meaningful step, call report_progress with phase
    "step_completed" and the actual percent, then continue to the next step.
 8. Call export_image with one card root ID at a time after meaningful
    composition changes so every 1080x1350 card can be inspected at full size.
    Treat each image as a visual verification checkpoint. For every exported
-   card explicitly verify: the assigned photo is visible; every EditorInput
+   card explicitly verify: the assigned photo is visible; every slide-plan
    text string is visible; no photo covers any text; text stays inside the card;
    contrast is readable; crop preserves the requested subject; and the card is
    not merely a full-bleed photo. If any check fails, inspect get_node/get_jsx,
    repair layer order or geometry, and export that card again. An {error: ...}
    result is a failed checkpoint, not an image.
-   Compare the export against EditorInput.imageDescription: if it says
-   full-bleed, the image must visibly reach all four card edges; if contained,
-   the non-image region must contain the specified text/graphic composition.
+   Compare the export against the slide's imageTreatment: if "full_bleed", the
+   image must visibly reach all four card edges; if "contained", the non-image
+   region must contain the specified text/graphic composition.
    A mostly blank card or an image occupying only a corner is a failed visual
    checkpoint even when validate_carousel reports an image fill.
+   Text quality is a pass/fail requirement at every export checkpoint. Reject
+   and repair any text that is faint, blurred-looking, semi-transparent,
+   low-contrast, overlapped, truncated, clipped by a parent, outside its panel,
+   touching an edge, or unreadable at normal Instagram feed size. Verify the
+   complete literal string from the slide plan is visible, not merely that a
+   TEXT node exists. If uncertain, strengthen contrast, enlarge the text box, move
+   it inward, and export again.
+   export_image is the visual check; validate_carousel is only a structural
+   check and can never substitute for it. If any card export is unavailable or
+   returns an error, do not report completed. Repair the target/arguments and
+   retry. Never say visual verification was "보류" and then complete.
 9. After the final mutation and per-card visual checks, call
    validate_carousel. Repair every returned error and call it again. Do not
    mutate the document after it returns ok=true unless you validate again.
@@ -120,14 +158,46 @@ that was not applied to the document.
    with its actual title/copy/asset IDs, the final post caption, summary,
    warnings, and unresolved items.
 
+Composition guidance (keep it simple and legible; do not impose a house style):
+- Do not default every card to the same centered photo + two left-aligned text
+  lines. Use each slide's intent and imageIntent to vary the focal crop, text
+  placement, and scale across cards while keeping the series recognizable.
+- Preserve a clear focal point and reading order. Give the headline and the
+  supporting copy a strong size contrast so hierarchy is obvious at feed size.
+- Follow each slide's imageTreatment and per-slide overlay direction. Any
+  decorative element must stay subordinate to the photo and must never touch,
+  cover, clip, or reduce the contrast of any text.
+- Do not invent a specific aesthetic the slide plan did not ask for. Avoid
+  gratuitous rotation, stickers, emoji, badges, tabs, or heavy decoration.
+  Prefer clean type, adequate whitespace, and a legible contrast treatment that
+  reads well as an Instagram post.
+
+Allowed visual vocabulary (keep the toolkit small — this is a design guideline):
+- Build each card from only these elements, back to front: CARD_BACKGROUND,
+  IMAGE_SLOT containing the user photo (IMAGE_LAYER), an optional single
+  CONTRAST_OVERLAY (one full-slide dark frame at roughly 0.3 opacity, with NO
+  text descendants), optional thin fully-opaque lines/rules, and TEXT_* layers.
+- Do NOT create badges, circles, stars, polygons, vectors, stickers, arbitrary
+  rectangles, or translucent panels behind text. Achieve hierarchy only with
+  crop, whitespace, typography scale, text color, the single dark overlay, and
+  opaque lines.
+- Opacity: only a standalone overlay or background frame that contains no text
+  may be translucent; never reduce opacity on any frame that contains text.
+- One user photo per card, chosen by the slide's sourceAssetId (a photo may
+  repeat across cards). Reference images are evidence only and are never placed.
+
 Design constraints:
-- Treat the supplied EditorInput as the authoritative slide count, visible
-  text, shared design direction, per-slide composition, and user-image mapping.
-- The final slide count must equal EditorInput.slides.length. For each card,
-  follow its sourceAssetId and imageDescription for source choice, focal crop,
-  scale, placement, tone, overlay, and relation to text.
-- Follow every text item's description as well as its content, size, color,
-  and font. Keep all visible text inside the 1080x1350 card safe area.
+- Treat the supplied slide plan as the authoritative slide count, visible text,
+  per-slide composition, and user-image mapping, and idea.designDirection as the
+  shared art direction.
+- The final slide count must equal idea.slides.length. For each card, follow its
+  sourceAssetId for the source photo and its imageTreatment and imageIntent for
+  focal crop, scale, placement, tone, overlay, and relation to text.
+- Render every text item's content in the requested language. The slide plan
+  supplies each text item's role and content; YOU choose exact size, color, and
+  font for maximum legibility. Titles are normally at least 44px and supporting
+  copy at least 28px on a 1080x1350 card. Keep all visible text inside the
+  1080x1350 card safe area with at least 64px margins.
 - Complete one card at a time: structure, assigned image, all requested text,
   get_node/get_jsx hierarchy check, visual export check, then progress to the
   next card. Do not batch all images after creating all text layers.
@@ -163,14 +233,19 @@ export function buildEditorAgentPrompt(input: EditorAgentInput): string {
     assetSetId: input.assets.assetSetId,
     items: input.assets.items.map(({ url: _url, ...asset }) => asset),
   };
+  const usedReferenceIds = new Set(input.idea.referenceIds);
+  const usedReferences = input.references.filter((reference) =>
+    usedReferenceIds.has(reference.id),
+  );
   return [
     "Create the requested composition in the connected OpenPencil document.",
     "\nTASK\n",
     safeJson(input.task),
-    "\nAUTHORITATIVE EDITOR INPUT\n",
-    safeJson(input.editorInput),
-    "\nSELECTED IDEA CARD\n",
-    safeJson(input.ideaCard),
+    "\nAUTHORITATIVE IDEA CARD & SLIDE PLAN\n",
+    safeJson(input.idea),
+    usedReferences.length
+      ? `\nDESIGN REFERENCES (evidence only; never render)\n${safeJson(usedReferences)}`
+      : "",
     "\nASSET MANIFEST\n",
     safeJson(promptAssets),
     "\nOPENPENCIL CONTEXT\n",
@@ -194,8 +269,10 @@ export function buildEditorAgentInput(
   ];
   const seen = new Set<string>();
 
-  for (const url of input.editorInput.design.referenceImageUrls) {
-    if (seen.has(url)) continue;
+  const usedReferenceIds = new Set(input.idea.referenceIds);
+  for (const reference of input.references) {
+    const url = reference.previewImageUrl;
+    if (!url || !usedReferenceIds.has(reference.id) || seen.has(url)) continue;
     seen.add(url);
     content.push({
       type: "input_text",
@@ -203,18 +280,19 @@ export function buildEditorAgentInput(
     });
     content.push({ type: "input_image", image: url, detail: "high" });
   }
-  for (const [index, slide] of input.editorInput.slides.entries()) {
-    if (!slide.imageUrl || seen.has(slide.imageUrl)) continue;
-    seen.add(slide.imageUrl);
+
+  const assetUrlById = new Map(
+    input.assets.items.map((asset) => [asset.assetId, asset.url]),
+  );
+  for (const [index, slide] of input.idea.slides.entries()) {
+    const url = assetUrlById.get(slide.sourceAssetId);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
     content.push({
       type: "input_text",
-      text: `USER_PHOTO for slide ${index + 1}: this image may be placed in the result.`,
+      text: `USER_PHOTO for slide ${index + 1} (assetId=${slide.sourceAssetId}): this image may be placed in the result.`,
     });
-    content.push({
-      type: "input_image",
-      image: slide.imageUrl,
-      detail: "high",
-    });
+    content.push({ type: "input_image", image: url, detail: "high" });
   }
 
   return [user(content as Parameters<typeof user>[0])];
@@ -279,7 +357,7 @@ export async function runEditorAgent(
     agent: "editor",
     run_id: runtime.context.runId,
     task_id: input.task.id,
-    idea_id: input.ideaCard.id,
+    idea_id: input.idea.id,
   };
 
   runtime.context.onEvent?.({
@@ -298,10 +376,10 @@ export async function runEditorAgent(
       const stream = await run(runtime.agent, buildEditorAgentInput(input), {
         context: runtime.context,
         stream: true,
-        // Six-card composition needs room for inspection, per-card rendering,
-        // image cloning/reparenting, export refinement, progress checkpoints,
-        // and one final structured-output turn.
-        maxTurns: options.maxTurns ?? 80,
+        // Multi-card composition needs generous room for inspection, per-card
+        // rendering, image cloning/reparenting, export refinement, repair
+        // loops, progress checkpoints, and one final structured-output turn.
+        maxTurns: options.maxTurns ?? 200,
       });
 
       for await (const event of stream) {
@@ -337,6 +415,12 @@ export async function runEditorAgent(
   const unresolved = [...result.finalOutput.unresolved];
   if (result.finalOutput.status === "completed" && !runtime.context.validationPassed) {
     unresolved.push("Final carousel validation did not pass after the last document mutation.");
+  }
+  const skippedVisualVerification = result.finalOutput.warnings.some((warning) =>
+    /export_image|export.*(보류|실패|확인하지 못|unavailable)|visual.*(not|skip|fail)/i.test(warning),
+  );
+  if (result.finalOutput.status === "completed" && skippedVisualVerification) {
+    unresolved.push("Per-card export_image visual verification was skipped or failed; structural validation alone is insufficient.");
   }
   const finalOutput: EditorAgentResult = result.finalOutput.status === "completed" && unresolved.length > 0
     ? { ...result.finalOutput, status: "needs_input", unresolved }

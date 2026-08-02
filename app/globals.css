@@ -616,3 +616,42 @@ button { cursor: pointer; }
 .summary-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #55b47e; box-shadow: 0 0 0 4px #e5f5eb; }
 @media (max-width: 680px) { .summary-metrics { grid-template-columns: 1fr; }.summary-metric strong { margin: 5px 0 3px; } }
 @media (max-width: 680px) { .onboarding-form-only > .onboarding-form-intro strong { font-size: 30px; }.onboarding-form-only > .onboarding-form-intro p { font-size: 14px; } }
+
+/* ── Idea card: per-card slide plan authored by the marketer ───────────── */
+.idea-visual span { font: 500 20px/1.1 'DM Mono'; letter-spacing: -.02em; }
+.idea-visual i { font: 9px 'DM Mono'; letter-spacing: .06em; color: rgba(255,255,255,.85); }
+.idea-plan-block { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--line); }
+.idea-plan-label { color: #a99f95; font: 8px 'DM Mono'; letter-spacing: .1em; margin-bottom: 8px; }
+.idea-design-direction { color: #7c756d !important; font-size: 10.5px !important; line-height: 1.55 !important; }
+.idea-refs { margin-top: 16px; }
+.idea-refs.empty { color: #a99f95; font: 8px 'DM Mono'; letter-spacing: .04em; }
+.idea-refs-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.idea-ref-chip { display: flex; align-items: center; gap: 7px; padding: 4px 9px 4px 4px; border: 1px solid var(--line); border-radius: 20px; background: #faf8f4; }
+.idea-ref-chip img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.idea-ref-chip em { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #ece6dd; color: #9a9088; font: 8px 'DM Mono'; font-style: normal; }
+.idea-ref-chip small { color: #8a827a; font: 8px 'DM Mono'; }
+.idea-plan { list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 8px; }
+.idea-plan-row { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
+.idea-plan-index { color: var(--coral); font: 9px 'DM Mono'; padding-top: 2px; }
+.idea-plan-copy { min-width: 0; }
+.idea-plan-copy strong { display: block; color: #5f584f; font: 500 11px 'Pretendard'; }
+.idea-plan-copy small { display: block; margin-top: 3px; color: #948c83; font-size: 9.5px; line-height: 1.5; }
+.idea-plan-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.idea-treatment { padding: 2px 7px; border-radius: 20px; font: 8px 'DM Mono'; letter-spacing: .03em; }
+.idea-treatment.full_bleed { background: #f3e3da; color: #b06a52; }
+.idea-treatment.contained { background: #e6eef2; color: #5c7f92; }
+.idea-treatment.neutral { background: #efece6; color: #8a827a; }
+.idea-treatment.ref { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #edf2e9; color: #6f8367; }
+
+/* ── Marketer procedure-compliance panel ──────────────────────────────── */
+.marketer-compliance { margin-top: 30px; padding: 22px 24px; border: 1px solid var(--line); background: var(--white); }
+.marketer-compliance-heading { color: #887f76; font: 9px 'DM Mono'; letter-spacing: .1em; margin-bottom: 15px; }
+.marketer-compliance-list { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+.compliance-row { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #faf8f4; }
+.compliance-row.fail { border-color: #e6c4b3; background: #fbf1ec; }
+.compliance-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font: 10px 'DM Mono'; }
+.compliance-row.pass .compliance-mark { background: #e3eee1; color: #6f8367; }
+.compliance-row.fail .compliance-mark { background: #f3ded3; color: #bd6a49; }
+.compliance-row strong { display: block; color: #625b53; font: 500 11px 'Pretendard'; }
+.compliance-row small { display: block; margin-top: 4px; color: #948c83; font-size: 9.5px; line-height: 1.5; }
+@media (max-width: 900px) { .marketer-compliance-list { grid-template-columns: 1fr; } }

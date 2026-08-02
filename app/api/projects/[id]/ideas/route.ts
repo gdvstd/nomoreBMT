@@ -6,7 +6,9 @@ import { marketerAgentInputSchema } from "@/lib/marketer-agent/types";
 import { generateTraceId } from "@openai/agents";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// The marketer now calls the Instagram reference scout (Apify + a nested model
+// call) as a one-shot tool, so allow the same budget the scout route used.
+export const maxDuration = 300;
 
 type Params = { params: Promise<{ id: string }> };
 
