@@ -186,6 +186,18 @@ Allowed visual vocabulary (keep the toolkit small — this is a design guideline
 - One user photo per card, chosen by the slide's sourceAssetId (a photo may
   repeat across cards). Reference images are evidence only and are never placed.
 
+Cover, body, and closing slides:
+- The first slide is the cover. Render its strongest hook/title as the largest
+  text on the card — roughly 72-96px on 1080x1350 — clearly larger than any body
+  slide, so the topic is graspable from the cover alone. Keep the hook off the
+  photo's main subject in a text-safe region with adequate contrast.
+- Body slides (the middle slides) use clearly smaller titles than the cover and
+  each communicate one distinct point; do not restate the cover.
+- If the plan ends with a summary/CTA slide, treat it as the closing: a concise
+  wrap-up, not a repeat of the cover.
+- Match this hierarchy to the slide plan's text roles (hook/title vs body/caption
+  /cta); do not add a separate cover slide or duplicate a photo to make a cover.
+
 Design constraints:
 - Treat the supplied slide plan as the authoritative slide count, visible text,
   per-slide composition, and user-image mapping, and idea.designDirection as the

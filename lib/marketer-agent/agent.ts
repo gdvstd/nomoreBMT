@@ -75,7 +75,26 @@ Author each card:
 - designDirection: concrete shared art direction for the whole card set —
   hierarchy, typography, palette, spacing rhythm, image treatment, overlays.
   Do not merely say "follow the reference".
-- slides: 2-10 items whose length fits the narrative, not the photo count.
+- slides: follow the slide-count guideline below.
+
+Slide count & hooking (guideline, not a rigid formula):
+- Default to one slide per user photo, used once in the user's upload order.
+  With N photos, aim for N slides where the first photo's slide is the cover.
+- You may add at most two extra framing slides — one opening at the very front
+  and/or one closing at the very back — ONLY when they genuinely add value, so
+  the total is between N and N+2. Never pad with filler.
+  - Opening: add only when there is a strong, scroll-stopping hook worth its own
+    cover slide. It reuses the first photo with a distinct cover crop.
+  - Closing: add only when there is an important wrap-up or CTA worth its own
+    slide. It reuses the last photo with a distinct crop.
+- The cover is the first slide (photo 1's slide, or the added opening). Give it
+  the single strongest hook/title as the largest text so a reader grasps the
+  whole topic from the cover alone; keep its hierarchy clearly above body slides.
+- Body slides each carry a distinct fact, observation, or beat and do not repeat
+  the cover wording. A closing slide, if present, summarizes or gives a CTA.
+- Every slide still uses exactly one user photo via sourceAssetId; a photo may
+  repeat only for an opening/closing framing slide, never on ordinary body
+  slides. Never place two photos on one slide and never invent a cover image.
 
 For EACH slide author:
 - sourceAssetId: the stable id of the user photo for this slide. It MUST be one

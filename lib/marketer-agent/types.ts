@@ -63,7 +63,9 @@ export const marketerIdeaCardSchema = z.object({
   referenceIds: z.array(z.string()).max(2).default([]),
   /** Card-level shared art direction (replaces EditorInput.design.description). */
   designDirection: z.string().min(1),
-  slides: z.array(slidePlanSchema).min(2).max(10),
+  // Guideline scale: one slide per user photo (N), optionally +1 opening and/or
+  // +1 closing, so N to N+2. Bounds allow 1..9 photos plus the two framing slides.
+  slides: z.array(slidePlanSchema).min(1).max(12),
 });
 
 /** What the model is asked to return (references are attached server-side). */
