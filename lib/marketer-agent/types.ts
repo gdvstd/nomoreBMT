@@ -107,5 +107,6 @@ export type MarketerAgentEvent =
   | { type: "reasoning_update"; message: string }
   | { type: "assistant_delta"; text: string }
   | { type: "tool_started"; toolName: string; args?: Record<string, unknown> }
+  | { type: "tool_progress"; toolName: string; message: string }
   | { type: "tool_finished"; toolName: string; resultSummary?: string }
   | { type: "result"; output: MarketerAgentOutput };

@@ -134,12 +134,16 @@ export function createScoutTool(
       }
       capture.called = true;
       try {
-        const context = await scoutInstagramReferences({
-          topic,
-          objective: purpose,
-          searchTerms,
-          ...researchDefaults,
-        });
+        const context = await scoutInstagramReferences(
+          {
+            topic,
+            objective: purpose,
+            searchTerms,
+            ...researchDefaults,
+          },
+          (message) =>
+            onEvent?.({ type: "tool_progress", toolName: SCOUT_TOOL_NAME, message }),
+        );
         capture.context = context;
         onEvent?.({
           type: "tool_finished",

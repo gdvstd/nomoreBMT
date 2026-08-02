@@ -655,3 +655,26 @@ button { cursor: pointer; }
 .compliance-row strong { display: block; color: #625b53; font: 500 11px 'Pretendard'; }
 .compliance-row small { display: block; margin-top: 4px; color: #948c83; font-size: 9.5px; line-height: 1.5; }
 @media (max-width: 900px) { .marketer-compliance-list { grid-template-columns: 1fr; } }
+
+/* ── Vue editor provenance panel: reference thumbnails auto-fit ───────── */
+.vue-editor-input-refs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.vue-editor-input-ref-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px 3px 3px; border: 1px solid var(--line); border-radius: 16px; background: #f7f4ef; text-decoration: none; }
+.vue-editor-input-ref-chip img { width: 20px; height: 20px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
+.vue-editor-input-ref-chip span { overflow: hidden; color: #8a827a; font: 7px 'DM Mono'; text-overflow: ellipsis; white-space: nowrap; }
+.vue-editor-input-intent { margin: 2px 0 0; color: #7d746c; font-size: 8px; line-height: 1.45; }
+.vue-editor-input-imageintent { margin: 3px 0 0; color: #a29a91; font-size: 7.5px; line-height: 1.4; }
+.vue-editor-input-inspirations { list-style: none; margin: 5px 0 0; padding: 0; display: grid; gap: 3px; }
+.vue-editor-input-inspirations li { color: #94a08c; font: 7px 'DM Mono'; }
+.vue-editor-input-inspirations strong { color: #6f8367; }
+
+/* ── Editor agent stream: wrap long reasoning instead of growing sideways ─ */
+.vue-agent-run-row strong { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word; }
+.vue-agent-run-summary, .vue-agent-run-row { min-width: 0; max-width: 100%; }
+.vue-agent-run-row > div { flex: 1 1 auto; min-width: 0; }
+
+/* ── Collapsible raw slide-plan JSON (folded by default) ─────────────── */
+.vue-editor-input-raw { margin-top: 12px; }
+.vue-editor-input-raw summary { cursor: pointer; padding: 8px 0 6px; color: #8e867e; font: 8px 'DM Mono'; letter-spacing: .06em; list-style: none; }
+.vue-editor-input-raw summary::-webkit-details-marker { display: none; }
+.vue-editor-input-raw summary::before { content: '＋ '; color: var(--coral); }
+.vue-editor-input-raw[open] summary::before { content: '− '; }

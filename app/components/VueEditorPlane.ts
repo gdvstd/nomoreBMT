@@ -62,7 +62,7 @@ type CarouselValidation = {
 };
 
 const modeCopy: Record<Mode, { label: string; caption: string; description: string }> = {
-  auto: { label: "Auto", caption: "자동 진행", description: "편집 과정은 접어두고, 완성될 때까지 BMT가 작업을 진행해요." },
+  auto: { label: "Auto", caption: "자동 진행", description: "에이전트가 카드를 자동으로 생성합니다. 완료되면 게시물 검토로 넘어갑니다." },
   live: { label: "Live", caption: "실시간 편집", description: "사진을 자르고 배치하는 과정을 캔버스에서 실시간으로 확인해요." },
 };
 
@@ -1396,7 +1396,10 @@ const VueEditorPlane = defineComponent({
                 : null,
             ]),
           ]))),
-          h("pre", null, JSON.stringify(props.idea.slides, null, 2)),
+          h("details", { class: "vue-editor-input-raw" }, [
+            h("summary", null, "원본 슬라이드 플랜 JSON"),
+            h("pre", null, JSON.stringify(props.idea.slides, null, 2)),
+          ]),
         ]),
       ]);
     }
@@ -1405,7 +1408,7 @@ const VueEditorPlane = defineComponent({
       return h("div", { class: "vue-auto-view" }, [
         h("div", { class: "vue-auto-hero" }, [
           h("div", { class: "vue-live-orb" }, "✦"),
-          h("div", null, [h("span", { class: "vue-kicker" }, "AUTO LAYOUT"), h("h2", null, "좋은 흐름을\n자동으로 만들고 있어요."), h("p", null, modeCopy.auto.description)]),
+          h("div", null, [h("span", { class: "vue-kicker" }, "AUTO LAYOUT"), h("h2", null, "카드를 생성하는 중"), h("p", null, modeCopy.auto.description)]),
         ]),
         h("div", { class: "vue-auto-progress" }, [
           h("div", { class: "vue-progress-heading" }, [h("span", null, isComplete.value ? "편집이 완료됐어요" : "편집 중이에요"), h("strong", null, `${progress.value}%`)]),
@@ -1439,7 +1442,7 @@ const VueEditorPlane = defineComponent({
         h(OpenPencilCanvas, { interactive: false }),
       ]),
       h("div", { class: "editor-plane-heading" }, [
-        h("div", null, [h("h1", null, ["선택한 방향을 ", h("em", null, "장면으로")])]),
+        h("div", null, [h("h1", null, ["카드 ", h("em", null, "편집")])]),
       ]),
       modeTabs(),
       h("div", { class: "vue-mode-description" }, [h("span", null, modeCopy[mode.value].caption), h("p", null, modeCopy[mode.value].description)]),

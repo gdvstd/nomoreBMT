@@ -427,8 +427,10 @@ async function analyzeApifyCandidates(
   apiKey: string,
   model: string,
   skillInstructions: string,
+  onProgress?: ScoutProgress,
 ) {
   const candidates = collection.candidates.slice(0, 18);
+  onProgress?.(`후보 ${candidates.length}개를 이미지·캡션 기준으로 분석하는 중`);
   const modelCandidates = candidates.map(({ imageUrls: _imageUrls, ...candidate }) => ({
     ...candidate,
     mediaEvidenceCount: _imageUrls.length,
@@ -525,6 +527,7 @@ async function analyzeApifyCandidates(
       response.status,
     );
   }
+  onProgress?.("분석 결과에서 레퍼런스를 검증·랭킹하는 중");
   const modelOutput = JSON.parse(
     extractOutputText(payload),
   ) as ReferenceScoutModelOutput;
@@ -536,8 +539,11 @@ async function analyzeApifyCandidates(
   });
 }
 
+export type ScoutProgress = (message: string) => void;
+
 export async function scoutInstagramReferences(
   input: ReferenceScoutInput,
+  onProgress?: ScoutProgress,
 ): Promise<InstagramReferenceContext> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new ReferenceScoutError("OPENAI_API_KEY is not configured.");
@@ -546,17 +552,26 @@ export async function scoutInstagramReferences(
     process.env.OPENAI_REFERENCE_MODEL?.trim() ||
     process.env.OPENAI_MODEL?.trim() ||
     "gpt-5.6";
+  onProgress?.("조사 스킬을 불러오고 검색을 준비하는 중");
   const skillInstructions = await loadMarketerSkill(
     "scout-instagram-references",
   );
   const apifyToken = process.env.APIFY_API_TOKEN?.trim();
   if (apifyToken) {
     try {
+      onProgress?.("Apify로 주제와 유사한 해시태그·공개 게시물 후보를 수집하는 중");
       const collection = await collectApifyInstagramCandidates(
         input,
         apifyToken,
       );
+      onProgress?.(
+        `공개 게시물 후보 ${collection.candidates.length}개 확보` +
+          (collection.searchTerms.length
+            ? ` · 검색어 [${collection.searchTerms.join(", ")}]`
+            : ""),
+      );
       if (!collection.candidates.length) {
+        onProgress?.("조건에 맞는 공개 게시물이 없어 사용자 사진 근거로 진행");
         return emptyApifyContext(input, collection);
       }
       return await analyzeApifyCandidates(
@@ -565,6 +580,7 @@ export async function scoutInstagramReferences(
         apiKey,
         model,
         skillInstructions,
+        onProgress,
       );
     } catch (error) {
       if (error instanceof ApifyReferenceScoutError) {
@@ -577,6 +593,7 @@ export async function scoutInstagramReferences(
     }
   }
 
+  onProgress?.("웹 검색으로 유사한 공개 Instagram 게시물을 탐색하는 중");
   const country = /^[a-z]{2}$/i.test(input.region)
     ? input.region.toUpperCase()
     : null;
@@ -662,6 +679,7 @@ export async function scoutInstagramReferences(
     );
   }
 
+  onProgress?.("검색 결과에서 직접 게시물 URL을 검증·랭킹하는 중");
   const modelOutput = JSON.parse(
     extractOutputText(payload),
   ) as ReferenceScoutModelOutput;

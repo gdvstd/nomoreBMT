@@ -121,6 +121,16 @@ that was not applied to the document.
    each line its own non-overlapping vertical band and keep all glyphs at least
    64px from every card edge. A render warning affecting layout is a repair
    task, never an acceptable final warning.
+   Never clip text or break a word mid-character. Size each Text node's width and
+   height to fit its full string at the chosen font size. Line breaks may fall
+   ONLY on spaces or natural phrase boundaries — Korean copy must never split
+   inside a word (어절), e.g. never break "먹고" into "먹" + "고". If a title is
+   too long for one line, either widen its box, reduce the size within the
+   allowed range, or break it at a space into balanced lines; never let a
+   character be cut off, a word be split, or a glyph overflow its box. After
+   rendering text, verify with get_node and the card export that every character
+   is fully visible inside its box and inside the card safe area, and re-render
+   with a wider or taller box if any glyph is clipped or wrapped mid-word.
 7. After each meaningful step, call report_progress with phase
    "step_completed" and the actual percent, then continue to the next step.
 8. Call export_image with one card root ID at a time after meaningful
@@ -157,6 +167,19 @@ that was not applied to the document.
    concise structured metadata including cardRoots, one slides entry per card
    with its actual title/copy/asset IDs, the final post caption, summary,
    warnings, and unresolved items.
+
+You own the visual realization. The slide plan fixes the CONTENT contract — which
+photo (sourceAssetId), the image treatment, the text strings, and each slide's
+intent — but it deliberately leaves the CRAFT to you. Everything the plan does
+not specify is yours to decide: type treatment (size, weight, case, alignment,
+line rhythm, and the font when a brand or available font fits), text placement
+and grouping, photo crop and framing, whitespace, color and contrast treatment,
+and the overall composition. Choose them deliberately to best express each
+slide's intent and imageIntent, the card's designDirection, and the brand's mood,
+identity, and likely target audience given in the brand context. Do not reuse one
+rigid template or the same stiff font and layout on every card; tailor and vary
+the composition to the material, staying within the allowed visual vocabulary and
+the legibility rules above.
 
 Composition guidance (keep it simple and legible; do not impose a house style):
 - Do not default every card to the same centered photo + two left-aligned text
