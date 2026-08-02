@@ -35,7 +35,7 @@ The full structured context is sent to both downstream agents:
 The Instagram ID is stored as account identity for later analysis. It does not
 replace Instagram OAuth or the access token required by the Graph API.
 
-## Project assets and EditorInput
+## Project assets and content flow
 
 Authenticated projects store user photos and selected Instagram design
 references in the private `project-assets` Supabase Storage bucket. Apply
@@ -45,26 +45,62 @@ bucket, `project_assets` metadata table, grants, and owner-only RLS policies.
 The creation flow is:
 
 1. Upload user photos and optional descriptions to private Storage.
-2. Run reference scouting once and send public preview candidates to Marketer.
-3. Let each idea select up to two design-reference asset IDs.
-4. After the user selects one idea, copy only those references into Storage.
-5. Call `POST /api/projects/[id]/editor/input` once to create the selected
-   idea's slide-level `EditorInput`.
-6. Send `EditorInput`, user photos, and design references to Editor Agent.
-7. On review, optionally upload the final PNG slides under the authenticated
+2. The Marketing Agent decides `topic`/`purpose`/`searchTerms` and calls the
+   `scout_instagram_references` tool exactly once. Region (KR), carousel format,
+   30-day recency, and reference count are fixed server-side.
+3. The Marketing Agent returns exactly two idea cards, each carrying a complete
+   per-slide plan (`sourceAssetId`, `imageTreatment`, text, `intent`,
+   `imageIntent`, and the references it drew on). There is no separate
+   EditorInput planner step — the marketer authors the plan directly.
+4. The user selects one idea; its slide plan and references pass straight to the
+   Editor Agent.
+5. The Editor Agent composes each card in the OpenPencil document from a small
+   visual vocabulary: the user photo, an optional full-slide dark overlay,
+   opaque lines, and text.
+6. On review, optionally upload the final PNG slides under the authenticated
    user's `generated/` Storage prefix.
-8. Call `POST /api/instagram/publish` to create each Instagram child media
+7. Call `POST /api/instagram/publish` to create each Instagram child media
    container, create the carousel container, wait for processing, and publish.
 
-Carousel length and photo mapping are deterministic. The app accepts at most
-nine user photos, creates one cover from the first photo, then creates exactly
-one body slide per photo in upload order. For example, five photos produce six
-slides. Every slide contains exactly one visible user image; the Editor
-validation rejects missing, reordered, or multi-image cards.
+Slide count follows a guideline rather than a rigid formula: the default is one
+slide per user photo in upload order, and the first photo's slide acts as the
+cover. The Marketing Agent may add at most one opening and/or one closing slide
+when they add real value, so N photos produce N to N+2 slides. Every slide maps
+to a user photo through a stable `sourceAssetId` (a photo may repeat only on an
+added opening/closing slide), and the Editor validation requires each card to
+contain exactly one visible user image matching its slide's `sourceAssetId`;
+missing or mismatched images are rejected.
 
 Reference images are multimodal design evidence only and must never be placed
 in the finished carousel. Database rows retain storage paths; Agent runs use
 short-lived signed URLs.
+
+## Agents
+
+Two agents drive content creation:
+
+- **Marketing Agent** — reads the brief, brand context, and uploaded photos;
+  decides the research query and calls `scout_instagram_references` once; then
+  returns two distinct idea cards, each with a complete per-slide plan. It works
+  only from the brief and visible photos, never inventing venues, menus, prices,
+  or metrics, and cites the references each slide drew on.
+- **Editor Agent** — turns the selected slide plan into a finished carousel in
+  the OpenPencil document. It keeps the small visual vocabulary above, owns the
+  craft the plan leaves open (typography, crop, placement, composition), and
+  must pass carousel validation before completing.
+
+Both agents also receive the structured onboarding brand context and, when an
+owned-account analysis exists, `brandContext.ownedAccountContext`.
+
+Evidence rules shared by both:
+
+- Do not estimate hidden likes, comments, saves, shares, or reach; keep missing
+  metrics `null`.
+- Use only verified direct `instagram.com/p`, `/reel`, or `/tv` URLs as
+  references.
+- Separate observation from inference and preserve confidence and limitations.
+- Never place a reference image in the final post; reuse only transferable
+  principles.
 
 ## Instagram context model
 
@@ -162,3 +198,16 @@ curl -X POST http://localhost:3000/api/instagram/references \
 The response includes verified Instagram URLs, search sources, similarity
 scores, evidence scope, transferable creative elements, and editor guidance.
 Render returned source URLs as visible clickable links in any user-facing UI.
+
+During idea generation the Marketing Agent invokes this same scouting logic as a
+one-shot `scout_instagram_references` tool, deciding `topic`/`purpose`/
+`searchTerms` itself while the region, format, recency, and count stay fixed.
+
+## Validation
+
+After changing agent code, prompts, or skills, run:
+
+```bash
+npx tsc --noEmit
+npm run build
+```
