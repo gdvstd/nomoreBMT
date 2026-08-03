@@ -14,13 +14,10 @@ The project ranked **#1 in the Daker mutual-evaluation leaderboard (100.000)**
 and advanced to the finals.
 
 <p align="center">
-  <img src="./public/showcase/daker-leaderboard-1st.png" alt="Daker Agent 24 Hackathon leaderboard with the submitted team ranked first at 100.000" width="900" />
+  <img src="./public/showcase/daker-leaderboard-1st.png" alt="Daker Agent 24 Hackathon leaderboard with the submitted team ranked first at 100.000" width="49%" />
+  <img src="./public/showcase/nomorebmt-pitch-final-slide.png" alt="NoMoreBMT pitch architecture showing the Marketing Agent, Editor Agent, publishing, and feedback loop" width="49%" />
 </p>
-<p align="center"><sub>Daker leaderboard evidence</sub></p>
-
-<p align="center">
-  <img src="./public/showcase/nomorebmt-pitch-final-slide.png" alt="NoMoreBMT pitch architecture showing the Marketing Agent, Editor Agent, publishing, and feedback loop" width="900" />
-</p>
+<p align="center"><sub>Daker leaderboard evidence&nbsp;&nbsp;·&nbsp;&nbsp;Pitch architecture</sub></p>
 
 👉 **Check out our demo account!** [Instagram @nomorebamti](https://www.instagram.com/nomorebamti/)
 
