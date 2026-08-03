@@ -17,8 +17,6 @@ and advanced to the finals.
   <img src="./public/showcase/daker-leaderboard-1st.png" alt="Daker Agent 24 Hackathon leaderboard with the submitted team ranked first at 100.000" width="49%" />
   <img src="./public/showcase/nomorebmt-pitch-final-slide-clean.png" alt="NoMoreBMT pitch architecture showing the Marketing Agent, Editor Agent, publishing, and feedback loop" width="49%" />
 </p>
-<p align="center"><sub>Daker leaderboard evidence&nbsp;&nbsp;·&nbsp;&nbsp;Pitch architecture</sub></p>
-
 👉 **Check out our demo account!** [Instagram @nomorebamti](https://www.instagram.com/nomorebamti/)
 
 🎥 [Watch our demo on YouTube](https://youtu.be/eud68q4d-mc) · 📄 [Read the pitch deck](./public/showcase/nomorebmt-pitch.pdf)
