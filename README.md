@@ -1,4 +1,4 @@
-# NoMoreBMT
+# NoMoreBMT (Bamti)
 
 ## YAI x OpenAI Hack #1 Leaderboard Solution
 
@@ -10,8 +10,7 @@ content, then improves the next post from real account feedback.
 `Brand identity → Research → Plan → Edit → Publish → Analyze → Improve`
 
 This is the submission for the YAI x OpenAI [Daker Agent 24 Hackathon](https://daker.ai/public/hackathons/agent-24-hackathon).
-The project ranked **#1 in the Daker mutual-evaluation leaderboard (100.000)**
-and advanced to the finals.
+The project ranked **#1 in the Daker mutual-evaluation leaderboard (100.000)**.
 
 <p align="center">
   <img src="./public/showcase/daker-leaderboard-1st.png" alt="Daker Agent 24 Hackathon leaderboard with the submitted team ranked first at 100.000" width="49%" />
